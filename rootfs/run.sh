@@ -6,6 +6,9 @@ DOMAIN=$(jq -r '.domain // ""' "$OPTIONS_FILE")
 CERTFILE=$(jq -r '.certfile // "fullchain.pem"' "$OPTIONS_FILE")
 KEYFILE=$(jq -r '.keyfile // "privkey.pem"' "$OPTIONS_FILE")
 ENABLE_TURN=$(jq -r '.enable_turn // true' "$OPTIONS_FILE")
+TUNNEL_ENABLED=$(jq -r '.tunnel_enabled // false' "$OPTIONS_FILE")
+TUNNEL_TOKEN=$(jq -r '.tunnel_token // ""' "$OPTIONS_FILE")
+TUNNEL_HOSTNAME=$(jq -r '.tunnel_hostname // ""' "$OPTIONS_FILE")
 
 SSL_CERT="/ssl/${CERTFILE}"
 SSL_KEY="/ssl/${KEYFILE}"
@@ -43,6 +46,9 @@ fi
 export INGRESS_ENTRY
 export HTTPS_HOST_PORT
 export HOST_IP
+export TUNNEL_ENABLED
+export TUNNEL_TOKEN
+export TUNNEL_HOSTNAME
 
 build_san() {
     local san="DNS:${DOMAIN:-localhost},IP:127.0.0.1"
@@ -125,6 +131,16 @@ if [ "$ENABLE_TURN" = "true" ]; then
     turnserver -c /tmp/turnserver.conf &
 else
     echo "[vipsy] TURN disabled"
+fi
+
+if [ "$TUNNEL_ENABLED" = "true" ] && [ -n "$TUNNEL_TOKEN" ]; then
+    mkdir -p /data/tunnel
+    echo "[vipsy] starting cloudflare tunnel"
+    cloudflared tunnel --no-autoupdate --metrics 127.0.0.1:20241 \
+        run --token "$TUNNEL_TOKEN" >> /data/tunnel/cloudflared.log 2>&1 &
+    echo "[vipsy] cloudflared started (pid=$!)"
+else
+    echo "[vipsy] cloudflare tunnel disabled"
 fi
 
 echo "[vipsy] starting caddy"

@@ -1,6 +1,6 @@
 {
   "name": "Vipsy",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "slug": "vipsy",
   "description": "Secure remote access to Home Assistant — application-layer gateway with TLS, WebSocket and WebRTC support. No VPN required.",
   "url": "https://github.com/nky001/vipsy",
@@ -24,12 +24,18 @@
     "domain": "",
     "certfile": "fullchain.pem",
     "keyfile": "privkey.pem",
-    "enable_turn": true
+    "enable_turn": true,
+    "tunnel_enabled": false,
+    "tunnel_token": "",
+    "tunnel_hostname": ""
   },
   "schema": {
     "domain": "str",
     "certfile": "str",
     "keyfile": "str",
-    "enable_turn": "bool"
+    "enable_turn": "bool",
+    "tunnel_enabled": "bool",
+    "tunnel_token": "str?",
+    "tunnel_hostname": "str?"
   }
 }

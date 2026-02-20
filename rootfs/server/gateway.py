@@ -11,6 +11,8 @@ from pathlib import Path
 
 from flask import Flask, jsonify, render_template
 
+import tunnel_manager
+
 OPTIONS_PATH = os.environ.get("OPTIONS_PATH", "/data/options.json")
 INGRESS_PORT = int(os.environ.get("INGRESS_PORT", 8099))
 HA_CORE_HOST = os.environ.get("HA_CORE_HOST", "homeassistant")
@@ -193,6 +195,7 @@ def _build_access_info(domain):
             "reachable": _ha_reachable(),
             "proxy_ok": _ha_proxy_ok(),
         },
+        "tunnel": tunnel_manager.status(),
     }
     _access_cache["data"] = result
     _access_cache["ts"] = now
@@ -221,6 +224,7 @@ def index():
     cert_status = _cert_expiry(cert_path)
     access = _build_access_info(domain)
 
+    tunnel = tunnel_manager.status()
     return render_template(
         "index.html",
         domain=domain,
@@ -230,9 +234,10 @@ def index():
         enable_turn=enable_turn,
         cert_status=cert_status,
         access=access,
+        tunnel=tunnel,
         now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         ingress_entry=INGRESS_ENTRY,
-        version=options.get("_version", "1.0.7"),
+        version=options.get("_version", "1.2.0"),
     )
 
 
@@ -250,6 +255,7 @@ def status():
     return jsonify(
         caddy=_service_running("caddy"),
         turn=_service_running("turnserver") if enable_turn else None,
+        tunnel=tunnel_manager.is_running() if tunnel_manager.is_enabled() else None,
         tls=_cert_expiry(cert_path),
         mode="remote" if domain else "lan-only",
         domain=domain,
@@ -260,6 +266,11 @@ def status():
 def access():
     domain = options.get("domain", "")
     return jsonify(_build_access_info(domain))
+
+
+@app.route("/api/tunnel")
+def tunnel_status():
+    return jsonify(tunnel_manager.status())
 
 
 @app.route("/api/diagnostics")
@@ -280,6 +291,10 @@ def diagnostics():
         warnings.append("Home Assistant Core is not reachable")
     if not _ha_proxy_ok():
         warnings.append("HA Core returned 400 — add trusted_proxies to configuration.yaml")
+    if tunnel_manager.is_enabled() and not tunnel_manager.is_running():
+        warnings.append("Cloudflare Tunnel is enabled but cloudflared is not running")
+    if tunnel_manager.is_enabled() and tunnel_manager.is_running() and not tunnel_manager.is_healthy():
+        warnings.append("Cloudflare Tunnel is running but not healthy — check connectivity")
 
     return jsonify(warnings=warnings, count=len(warnings))
 

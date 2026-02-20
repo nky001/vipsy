@@ -25,6 +25,50 @@
       </div>
     </header>
 
+    {% if tunnel.enabled %}
+    <section class="section-title">Secure Tunnel</section>
+    <div class="tunnel-card {{ 'tunnel-card--ok' if tunnel.healthy else ('tunnel-card--warn' if tunnel.running else 'tunnel-card--err') }}" id="tunnel-card">
+      <div class="tunnel-card__header">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" fill="currentColor"/>
+        </svg>
+        <span>Cloudflare Tunnel</span>
+        <span class="access-status {{ 'access-status--ok' if tunnel.healthy else ('access-status--neutral' if tunnel.running else 'access-status--err') }}" id="tunnel-status">
+          {% if tunnel.healthy %}✓ Connected{% elif tunnel.running %}⟳ Connecting{% else %}✕ Disconnected{% endif %}
+        </span>
+      </div>
+      <div class="tunnel-card__body">
+        {% if tunnel.hostname %}
+        <div class="access-row">
+          <span class="access-label">Hostname</span>
+          <span class="access-value mono" id="tunnel-hostname">{{ tunnel.hostname }}</span>
+        </div>
+        <div class="access-row">
+          <span class="access-label">URL</span>
+          <a href="{{ tunnel.url }}" target="_blank" rel="noopener" class="access-link" id="tunnel-url">{{ tunnel.url }}</a>
+        </div>
+        {% endif %}
+        <div class="access-row">
+          <span class="access-label">Unique ID</span>
+          <span class="access-value mono" id="tunnel-uid">{{ tunnel.unique_id or '—' }}</span>
+        </div>
+        <div class="access-row">
+          <span class="access-label">Provider</span>
+          <span class="access-value">Cloudflare Zero Trust</span>
+        </div>
+      </div>
+      <div class="tunnel-card__hint tunnel-card__hint--ok" id="tunnel-hint-ok" {% if not tunnel.healthy %}style="display:none"{% endif %}>
+        Accessible from anywhere — no port forwarding required.
+      </div>
+      <div class="tunnel-card__hint tunnel-card__hint--warn" id="tunnel-hint-warn" {% if tunnel.healthy or not tunnel.running %}style="display:none"{% endif %}>
+        Tunnel is connecting. This usually takes a few seconds.
+      </div>
+      <div class="tunnel-card__hint tunnel-card__hint--err" id="tunnel-hint-err" {% if tunnel.healthy or tunnel.running %}style="display:none"{% endif %}>
+        Tunnel is not running. Check the add-on logs for details.
+      </div>
+    </div>
+    {% endif %}
+
     <section class="section-title">Access</section>
     <div class="access-grid">
 
@@ -171,6 +215,13 @@
             <td>coturn</td>
             <td><span class="dot dot--{{ 'green' if turn_up else 'red' }}"></span>{{ 'Up' if turn_up else 'Down' }}</td>
             <td class="muted">TURN/STUN relay (WebRTC)</td>
+          </tr>
+          {% endif %}
+          {% if tunnel.enabled %}
+          <tr>
+            <td>cloudflared</td>
+            <td><span class="dot dot--{{ 'green' if tunnel.running else 'red' }}"></span>{{ 'Up' if tunnel.running else 'Down' }}</td>
+            <td class="muted">Cloudflare Tunnel connector</td>
           </tr>
           {% endif %}
           <tr>

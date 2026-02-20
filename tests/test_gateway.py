@@ -52,6 +52,28 @@ def test_diagnostics():
     assert "count" in data
 
 
+def test_tunnel_endpoint():
+    resp = _client().get("/api/tunnel")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "enabled" in data
+    assert "running" in data
+    assert "healthy" in data
+    assert "hostname" in data
+    assert "provider" in data
+    assert data["provider"] == "cloudflare"
+    assert data["enabled"] is False
+
+
+def test_access_includes_tunnel():
+    resp = _client().get("/api/access")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "tunnel" in data
+    assert "enabled" in data["tunnel"]
+    assert "provider" in data["tunnel"]
+
+
 def test_index_returns_html():
     resp = _client().get("/")
     assert resp.status_code == 200

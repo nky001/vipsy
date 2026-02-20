@@ -57,8 +57,46 @@
       .catch(function () {});
   }
 
+  function refreshTunnel() {
+    var card = document.getElementById("tunnel-card");
+    if (!card) return;
+    fetch(basePath + "api/tunnel")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var st = document.getElementById("tunnel-status");
+        if (st) {
+          if (d.healthy) {
+            st.textContent = "\u2713 Connected";
+            st.className = "access-status access-status--ok";
+          } else if (d.running) {
+            st.textContent = "\u27f3 Connecting";
+            st.className = "access-status access-status--neutral";
+          } else {
+            st.textContent = "\u2715 Disconnected";
+            st.className = "access-status access-status--err";
+          }
+        }
+        setText("tunnel-hostname", d.hostname || "\u2014");
+        setText("tunnel-uid", d.unique_id || "\u2014");
+        var urlEl = document.getElementById("tunnel-url");
+        if (urlEl && d.url) {
+          urlEl.textContent = d.url;
+          urlEl.href = d.url;
+        }
+        card.className = "tunnel-card tunnel-card--" + (d.healthy ? "ok" : (d.running ? "warn" : "err"));
+        var hOk = document.getElementById("tunnel-hint-ok");
+        var hWarn = document.getElementById("tunnel-hint-warn");
+        var hErr = document.getElementById("tunnel-hint-err");
+        if (hOk) hOk.style.display = d.healthy ? "" : "none";
+        if (hWarn) hWarn.style.display = (!d.healthy && d.running) ? "" : "none";
+        if (hErr) hErr.style.display = (!d.healthy && !d.running) ? "" : "none";
+      })
+      .catch(function () {});
+  }
+
   setInterval(function () {
     refreshStatus();
     refreshAccess();
+    refreshTunnel();
   }, POLL_MS);
 })();
