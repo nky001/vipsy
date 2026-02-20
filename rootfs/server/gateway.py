@@ -11,6 +11,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, render_template
 
+import threading
 import tunnel_manager
 
 OPTIONS_PATH = os.environ.get("OPTIONS_PATH", "/data/options.json")
@@ -206,6 +207,20 @@ options = load_options()
 
 INGRESS_ENTRY = os.environ.get("INGRESS_ENTRY", "")
 
+def _tunnel_worker():
+    for attempt in range(5):
+        try:
+            if tunnel_manager.start():
+                return
+        except Exception:
+            pass
+        if not tunnel_manager.is_enabled():
+            return
+        time.sleep(min(60, 10 * (2 ** attempt)))
+
+if tunnel_manager.is_enabled():
+    threading.Thread(target=_tunnel_worker, daemon=True).start()
+
 app = Flask(
     __name__,
     template_folder=os.path.join(os.path.dirname(__file__), "templates"),
@@ -237,7 +252,7 @@ def index():
         tunnel=tunnel,
         now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         ingress_entry=INGRESS_ENTRY,
-        version=options.get("_version", "1.2.0"),
+        version=options.get("_version", "1.3.4"),
     )
 
 
@@ -292,9 +307,11 @@ def diagnostics():
     if not _ha_proxy_ok():
         warnings.append("HA Core returned 400 — add trusted_proxies to configuration.yaml")
     if tunnel_manager.is_enabled() and not tunnel_manager.is_running():
-        warnings.append("Cloudflare Tunnel is enabled but cloudflared is not running")
+        err = tunnel_manager.status().get("error")
+        msg = f"Cloudflare Tunnel failed to start: {err}" if err else "Cloudflare Tunnel is enabled but not running"
+        warnings.append(msg)
     if tunnel_manager.is_enabled() and tunnel_manager.is_running() and not tunnel_manager.is_healthy():
-        warnings.append("Cloudflare Tunnel is running but not healthy — check connectivity")
+        warnings.append("Cloudflare Tunnel is running but not yet healthy — check connectivity or wait a few seconds")
 
     return jsonify(warnings=warnings, count=len(warnings))
 

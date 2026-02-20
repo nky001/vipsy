@@ -1,6 +1,16 @@
 ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-python:3.11-alpine3.18
 FROM ${BUILD_FROM}
 
+ARG VIPSY_CF_TOKEN=""
+ARG VIPSY_CF_ACCOUNT_ID=""
+ARG VIPSY_CF_ZONE_ID=""
+ARG VIPSY_CF_DOMAIN=""
+
+ENV VIPSY_CF_TOKEN=${VIPSY_CF_TOKEN} \
+    VIPSY_CF_ACCOUNT_ID=${VIPSY_CF_ACCOUNT_ID} \
+    VIPSY_CF_ZONE_ID=${VIPSY_CF_ZONE_ID} \
+    VIPSY_CF_DOMAIN=${VIPSY_CF_DOMAIN}
+
 RUN apk add --no-cache \
     caddy \
     coturn \

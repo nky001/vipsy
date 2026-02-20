@@ -61,8 +61,13 @@ def test_tunnel_endpoint():
     assert "healthy" in data
     assert "hostname" in data
     assert "provider" in data
+    assert "mode" in data
+    assert "fallback_url" in data
     assert data["provider"] == "cloudflare"
     assert data["enabled"] is False
+    assert data["mode"] in ("quick", "static")
+    assert "managed" in data
+    assert "error" in data
 
 
 def test_access_includes_tunnel():

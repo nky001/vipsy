@@ -48,23 +48,43 @@
           <a href="{{ tunnel.url }}" target="_blank" rel="noopener" class="access-link" id="tunnel-url">{{ tunnel.url }}</a>
         </div>
         {% endif %}
+        {% if tunnel.fallback_url %}
+        <div class="access-row" id="tunnel-fallback-row">
+          <span class="access-label">Temp URL <span class="pill pill--gray" style="font-size:.65rem;padding:.1rem .4rem">now</span></span>
+          <a href="{{ tunnel.fallback_url }}" target="_blank" rel="noopener" class="access-link" id="tunnel-fallback-url">{{ tunnel.fallback_url }}</a>
+        </div>
+        {% elif tunnel.mode == 'static' %}
+        <div class="access-row" id="tunnel-fallback-row" style="display:none">
+          <span class="access-label">Temp URL <span class="pill pill--gray" style="font-size:.65rem;padding:.1rem .4rem">now</span></span>
+          <a href="#" target="_blank" rel="noopener" class="access-link" id="tunnel-fallback-url"></a>
+        </div>
+        {% endif %}
         <div class="access-row">
           <span class="access-label">Unique ID</span>
           <span class="access-value mono" id="tunnel-uid">{{ tunnel.unique_id or '—' }}</span>
         </div>
         <div class="access-row">
           <span class="access-label">Provider</span>
-          <span class="access-value">Cloudflare Zero Trust</span>
+          <span class="access-value">Cloudflare {{ '(Static)' if tunnel.mode == 'static' else '(Quick — URL resets on restart)' }}</span>
         </div>
+        {% if tunnel.error %}
+        <div class="tunnel-error">
+          <svg width="15" height="15" viewBox="0 0 20 20" fill="none" style="flex-shrink:0;margin-top:.1rem">
+            <path d="M10 2L2 17h16L10 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+            <path d="M10 8v4M10 14v1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <span>{{ tunnel.error }}</span>
+        </div>
+        {% endif %}
       </div>
       <div class="tunnel-card__hint tunnel-card__hint--ok" id="tunnel-hint-ok" {% if not tunnel.healthy %}style="display:none"{% endif %}>
-        Accessible from anywhere — no port forwarding required.
+        Accessible from anywhere — no port forwarding required.{% if tunnel.mode == 'quick' %}<br><span class="small muted">Quick Tunnel URL changes on add-on restart.</span>{% endif %}
       </div>
       <div class="tunnel-card__hint tunnel-card__hint--warn" id="tunnel-hint-warn" {% if tunnel.healthy or not tunnel.running %}style="display:none"{% endif %}>
-        Tunnel is connecting. This usually takes a few seconds.
+        Tunnel is connecting. This usually takes a few seconds.{% if tunnel.fallback_url %} Use the <strong>Temp URL</strong> above in the meantime.{% endif %}
       </div>
       <div class="tunnel-card__hint tunnel-card__hint--err" id="tunnel-hint-err" {% if tunnel.healthy or tunnel.running %}style="display:none"{% endif %}>
-        Tunnel is not running. Check the add-on logs for details.
+        Tunnel is not running. Check the add-on logs.{% if tunnel.fallback_url %} Use the <strong>Temp URL</strong> above in the meantime.{% endif %}
       </div>
     </div>
     {% endif %}

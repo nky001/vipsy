@@ -15,6 +15,26 @@
     "enable_turn": {
       "name": "Enable TURN",
       "description": "Enable the coturn TURN/STUN relay for WebRTC camera and voice streams."
+    },
+    "tunnel_enabled": {
+      "name": "Enable Tunnel",
+      "description": "Enable Cloudflare Tunnel for secure remote access without port forwarding."
+    },
+    "cf_api_token": {
+      "name": "Cloudflare API Token",
+      "description": "Cloudflare API token with Tunnel:Edit and DNS:Edit permissions. Leave empty if baked into the image at build time."
+    },
+    "cf_account_id": {
+      "name": "Cloudflare Account ID",
+      "description": "Cloudflare account identifier. Found on the dashboard overview page."
+    },
+    "cf_zone_id": {
+      "name": "Cloudflare Zone ID",
+      "description": "Cloudflare zone identifier for the tunnel domain. Found on the domain overview page."
+    },
+    "cf_domain": {
+      "name": "Tunnel Domain",
+      "description": "Base domain for tunnel subdomains (e.g. vipsy.example.com). Unique IDs are prepended automatically."
     }
   }
 }

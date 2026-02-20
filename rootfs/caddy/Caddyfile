@@ -24,7 +24,6 @@
 
 	reverse_proxy @websocket {$HA_CORE_URL:http://homeassistant:8123} {
 		header_up Host {$HA_PROXY_HOST:homeassistant}
-		header_up X-Real-IP {remote_host}
 		header_up -X-Forwarded-For
 		header_up -X-Forwarded-Proto
 		header_up -X-Forwarded-Host
@@ -32,7 +31,6 @@
 
 	reverse_proxy {$HA_CORE_URL:http://homeassistant:8123} {
 		header_up Host {$HA_PROXY_HOST:homeassistant}
-		header_up X-Real-IP {remote_host}
 		header_up -X-Forwarded-For
 		header_up -X-Forwarded-Proto
 		header_up -X-Forwarded-Host

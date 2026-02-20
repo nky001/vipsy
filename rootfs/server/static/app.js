@@ -83,6 +83,17 @@
           urlEl.textContent = d.url;
           urlEl.href = d.url;
         }
+        var fbRow = document.getElementById("tunnel-fallback-row");
+        var fbEl = document.getElementById("tunnel-fallback-url");
+        if (fbRow && fbEl) {
+          if (d.fallback_url) {
+            fbEl.textContent = d.fallback_url;
+            fbEl.href = d.fallback_url;
+            fbRow.style.display = "";
+          } else {
+            fbRow.style.display = "none";
+          }
+        }
         card.className = "tunnel-card tunnel-card--" + (d.healthy ? "ok" : (d.running ? "warn" : "err"));
         var hOk = document.getElementById("tunnel-hint-ok");
         var hWarn = document.getElementById("tunnel-hint-warn");
@@ -90,6 +101,21 @@
         if (hOk) hOk.style.display = d.healthy ? "" : "none";
         if (hWarn) hWarn.style.display = (!d.healthy && d.running) ? "" : "none";
         if (hErr) hErr.style.display = (!d.healthy && !d.running) ? "" : "none";
+
+        var errEl = document.querySelector("#tunnel-card .tunnel-error");
+        if (d.error) {
+          if (!errEl) {
+            errEl = document.createElement("div");
+            errEl.className = "tunnel-error";
+            errEl.innerHTML = '<svg width="15" height="15" viewBox="0 0 20 20" fill="none" style="flex-shrink:0;margin-top:.1rem"><path d="M10 2L2 17h16L10 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M10 8v4M10 14v1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span></span>';
+            var body = document.querySelector("#tunnel-card .tunnel-card__body");
+            if (body) body.appendChild(errEl);
+          }
+          var sp = errEl.querySelector("span");
+          if (sp) sp.textContent = d.error;
+        } else if (errEl) {
+          errEl.remove();
+        }
       })
       .catch(function () {});
   }

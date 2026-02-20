@@ -64,7 +64,6 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:1.1rem 1.25rem;margin-bottom:.75rem;box-shadow:var(--shadow)}
 .card h2{font-size:.8rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:.75rem}
 
-pill{font-size:.72rem;font-weight:700;padding:.2rem .6rem;border-radius:6px}
 .pill{font-size:.72rem;font-weight:700;padding:.22rem .65rem;border-radius:6px}
 .pill--blue{background:#dbeafe;color:var(--blue)}
 .pill--gray{background:#f1f5f9;color:var(--gray)}
@@ -102,6 +101,8 @@ footer{display:flex;justify-content:space-between;margin-top:1.5rem;font-size:.7
 .tunnel-card__hint--ok{color:#166534;background:#f0fdf4;border-color:#bbf7d0}
 .tunnel-card__hint--warn{color:#92400e;background:#fffbeb;border-color:#fde68a}
 .tunnel-card__hint--err{color:#991b1b;background:#fef2f2;border-color:#fca5a5}
+
+.tunnel-error{display:flex;align-items:flex-start;gap:.5rem;padding:.65rem 1rem;font-size:.78rem;color:#991b1b;background:#fef2f2;border-top:1px solid #fca5a5;line-height:1.55;word-break:break-word}
 
 @media(max-width:520px){
   .container{padding:0}

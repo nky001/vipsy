@@ -36,6 +36,11 @@ Vipsy is a single Home Assistant add-on that acts as an application-layer gatewa
 | `certfile` | string | `fullchain.pem` | TLS certificate filename in `/ssl/` |
 | `keyfile` | string | `privkey.pem` | TLS private key filename in `/ssl/` |
 | `enable_turn` | bool | `true` | Enable coturn TURN/STUN relay |
+| `tunnel_enabled` | bool | `false` | Enable Cloudflare Tunnel for zero-config remote access |
+| `cf_api_token` | string | `""` | Cloudflare API token (Tunnel:Edit + DNS:Edit). Leave empty if baked at build time. |
+| `cf_account_id` | string | `""` | Cloudflare Account ID |
+| `cf_zone_id` | string | `""` | Cloudflare Zone ID for the tunnel domain |
+| `cf_domain` | string | `""` | Base domain for tunnel subdomains (e.g. `vipsy.example.com`) |
 
 ## Architecture
 
@@ -69,6 +74,21 @@ IoT devices (LAN only, never exposed)
 ## Security model
 
 The gateway follows a zero-trust application access model. Users authenticate to Home Assistant through a single hardened entry point. Only Home Assistant application traffic is exposed; the underlying network remains inaccessible. No device joins the LAN, and no client-side VPN is required.
+
+## Cloudflare Tunnel
+
+When `tunnel_enabled` is set, Vipsy automatically provisions a Cloudflare Tunnel for each installation. Each instance gets a unique 8-character ID and a permanent URL like `abcd1234.vipsy.example.com`. No port forwarding, no dynamic DNS, no client apps required.
+
+**How it works:**
+- On first start, the add-on calls the Cloudflare API to create a named tunnel, configure ingress, and set up a DNS CNAME record.
+- Credentials are persisted in `/data/tunnel/` so the tunnel survives restarts.
+- If CF credentials are not available, the add-on falls back to a free Quick Tunnel (ephemeral URL that changes on restart).
+
+**Providing Cloudflare credentials:**
+- **Add-on options (recommended):** Set `cf_api_token`, `cf_account_id`, `cf_zone_id`, and `cf_domain` in the add-on configuration.
+- **Build-time args:** Pass via `docker build --build-arg VIPSY_CF_TOKEN=... --build-arg VIPSY_CF_ACCOUNT_ID=... --build-arg VIPSY_CF_ZONE_ID=... --build-arg VIPSY_CF_DOMAIN=...`
+
+Never commit real credentials to source control.
 
 ## Ports
 
