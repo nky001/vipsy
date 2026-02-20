@@ -1,0 +1,50 @@
+{
+	admin off
+	auto_https off
+}
+
+:{$CADDY_HTTPS_PORT:443} {
+	tls {$TLS_CERT:/ssl/fullchain.pem} {$TLS_KEY:/ssl/privkey.pem}
+
+	encode gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "no-referrer"
+		-Server
+		-Alt-Svc
+	}
+
+	@websocket {
+		header Connection *Upgrade*
+		header Upgrade websocket
+	}
+
+	reverse_proxy @websocket {$HA_CORE_URL:http://homeassistant:8123} {
+		header_up Host {$HA_PROXY_HOST:homeassistant}
+		header_up X-Real-IP {remote_host}
+		header_up -X-Forwarded-For
+		header_up -X-Forwarded-Proto
+		header_up -X-Forwarded-Host
+	}
+
+	reverse_proxy {$HA_CORE_URL:http://homeassistant:8123} {
+		header_up Host {$HA_PROXY_HOST:homeassistant}
+		header_up X-Real-IP {remote_host}
+		header_up -X-Forwarded-For
+		header_up -X-Forwarded-Proto
+		header_up -X-Forwarded-Host
+
+		transport http {
+			read_buffer 16384
+		}
+	}
+
+	log {
+		output stdout
+		format console
+		level WARN
+	}
+}

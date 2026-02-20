@@ -1,0 +1,20 @@
+{
+  "configuration": {
+    "domain": {
+      "name": "Domain",
+      "description": "Your public domain for remote access (e.g. ha.example.com). Leave empty for LAN-only mode."
+    },
+    "certfile": {
+      "name": "Certificate file",
+      "description": "TLS certificate filename inside the /ssl/ directory."
+    },
+    "keyfile": {
+      "name": "Key file",
+      "description": "TLS private key filename inside the /ssl/ directory."
+    },
+    "enable_turn": {
+      "name": "Enable TURN",
+      "description": "Enable the coturn TURN/STUN relay for WebRTC camera and voice streams."
+    }
+  }
+}

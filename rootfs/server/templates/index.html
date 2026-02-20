@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Vipsy — Status</title>
+  <link rel="stylesheet" href="{{ ingress_entry }}/static/style.css">
+</head>
+<body>
+  <div class="container">
+
+    <header>
+      <div class="logo">
+        <img src="{{ ingress_entry }}/static/logo.png" alt="Vipsy logo" class="logo-img" width="34" height="34">
+        <div>
+          <h1>Vipsy</h1>
+          <p class="subtitle">Home Assistant Secure Gateway</p>
+        </div>
+      </div>
+      <div class="header-right">
+        <span class="badge badge--{{ 'green' if caddy_up else 'red' }}" id="run-badge">
+          {{ 'Running' if caddy_up else 'Stopped' }}
+        </span>
+        <span class="pill pill--{{ 'blue' if mode == 'Remote' else 'gray' }}">{{ mode }}</span>
+      </div>
+    </header>
+
+    <section class="section-title">Access</section>
+    <div class="access-grid">
+
+      <div class="access-card {{ 'access-card--ok' if access.local.reachable else 'access-card--warn' }}">
+        <div class="access-card__header">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <rect x="2" y="3" width="20" height="14" rx="2" stroke="currentColor" stroke-width="2"/>
+            <path d="M8 21h8M12 17v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <span>Local Network</span>
+          <span class="access-status {{ 'access-status--ok' if access.local.reachable else 'access-status--err' }}" id="local-status">
+            {{ '✓ Reachable' if access.local.reachable else '✕ Not Reachable' }}
+          </span>
+        </div>
+        <div class="access-card__body">
+          <div class="access-row">
+            <span class="access-label">LAN IP</span>
+            <span class="access-value mono" id="local-ip">{{ access.local.ip or '—' }}</span>
+          </div>
+          <div class="access-row">
+            <span class="access-label">Port</span>
+            <span class="access-value mono">{{ access.local.port }} (HTTPS)</span>
+          </div>
+          {% if access.local.url %}
+          <div class="access-row">
+            <span class="access-label">URL</span>
+            <a href="{{ access.local.url }}" target="_blank" rel="noopener" class="access-link" id="local-url">{{ access.local.url }}</a>
+          </div>
+          {% endif %}
+        </div>
+        {% if not access.local.reachable %}
+        <div class="access-card__hint">
+          Port {{ access.local.port }} is not responding. Check that Caddy is running. Use <strong>https://</strong> (not http).
+        </div>
+        {% else %}
+        <div class="access-card__hint access-card__hint--info">
+          Use <strong>https://</strong> — plain http will show &ldquo;Bad Request&rdquo;. Self-signed cert: click <em>Advanced → Proceed</em>.
+        </div>
+        {% endif %}
+      </div>
+
+      <div class="access-card {{ 'access-card--ok' if access.external.reachable else ('access-card--warn' if access.external.configured else 'access-card--info') }}">
+        <div class="access-card__header">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/>
+            <path d="M2 12h20M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20" stroke="currentColor" stroke-width="2"/>
+          </svg>
+          <span>Remote Access</span>
+          {% if not access.external.configured %}
+          <span class="access-status access-status--neutral">No Public IP</span>
+          {% elif access.external.reachable %}
+          <span class="access-status access-status--ok" id="ext-status">✓ Reachable</span>
+          {% else %}
+          <span class="access-status access-status--err" id="ext-status">✕ Not Reachable</span>
+          {% endif %}
+        </div>
+        <div class="access-card__body">
+          {% if access.external.mode == 'domain' %}
+          <div class="access-row">
+            <span class="access-label">Domain</span>
+            <span class="access-value mono" id="ext-domain">{{ access.external.domain }}</span>
+          </div>
+          {% endif %}
+          <div class="access-row">
+            <span class="access-label">Public IP</span>
+            <span class="access-value mono" id="ext-ip">{{ access.external.public_ip or 'Detecting…' }}</span>
+          </div>
+          <div class="access-row">
+            <span class="access-label">Port</span>
+            <span class="access-value mono">{{ access.external.port }} (HTTPS)</span>
+          </div>
+          {% if access.external.url %}
+          <div class="access-row">
+            <span class="access-label">URL</span>
+            <a href="{{ access.external.url }}" target="_blank" rel="noopener" class="access-link" id="ext-url">{{ access.external.url }}</a>
+          </div>
+          {% endif %}
+        </div>
+        {% if not access.external.configured %}
+        <div class="access-card__hint">
+          Could not determine public IP. Check internet connectivity.
+        </div>
+        {% elif access.external.mode == 'ip' and not access.external.reachable %}
+        <div class="access-card__hint">
+          Port <strong>{{ access.external.port }}</strong> is not yet forwarded on your router.<br>
+          <strong>One-time setup:</strong> In your router admin, create a port-forward rule:<br>
+          &nbsp;&nbsp;External port <strong>{{ access.external.port }}</strong> TCP &rarr; internal <strong>{{ access.local.ip or '(see LAN IP)' }}:{{ access.external.port }}</strong><br>
+          Then use <strong>https://{{ access.external.public_ip }}:{{ access.external.port }}</strong> from anywhere.<br>
+          Self-signed cert &mdash; click <em>Advanced &rarr; Proceed</em> on first visit.
+        </div>
+        {% elif access.external.mode == 'ip' and access.external.reachable %}
+        <div class="access-card__hint access-card__hint--info">
+          Self-signed certificate. On first visit click <em>Advanced &rarr; Proceed</em> in your browser.
+        </div>
+        {% elif access.external.mode == 'domain' and not access.external.reachable %}
+        <div class="access-card__hint">
+          Port {{ access.external.port }} on your domain is not serving Vipsy. Check router port-forwarding and DNS.
+        </div>
+        {% endif %}
+      </div>
+
+    </div>
+
+    <section class="section-title">Home Assistant Core</section>
+    <div class="card stat-row">
+      <span class="stat-label">HA Core (:8123)</span>
+      <span class="{{ 'chip chip--green' if access.ha_core.reachable else 'chip chip--red' }}" id="ha-status">
+        <span class="dot dot--{{ 'green' if access.ha_core.reachable else 'red' }}"></span>
+        {{ 'Reachable' if access.ha_core.reachable else 'Not Reachable' }}
+      </span>
+    </div>
+    {% if access.ha_core.reachable and not access.ha_core.proxy_ok %}
+    <div class="card card--setup">
+      <svg width="18" height="18" viewBox="0 0 20 20" fill="none" style="flex-shrink:0;color:#b45309">
+        <path d="M10 2L2 17h16L10 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+        <path d="M10 8v4M10 14v1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <div>
+        <strong>One-time HA setup needed</strong><br>
+        <span class="small muted">Add this to your <code>configuration.yaml</code> then restart HA Core:</span>
+        <pre class="setup-code">http:
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 172.30.33.0/24
+    - 127.0.0.1</pre>
+      </div>
+    </div>
+    {% endif %}
+
+    <section class="section-title">Services</section>
+    <div class="card">
+      <table>
+        <thead>
+          <tr><th>Service</th><th>Status</th><th>Role</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Caddy</td>
+            <td><span class="dot dot--{{ 'green' if caddy_up else 'red' }}"></span>{{ 'Up' if caddy_up else 'Down' }}</td>
+            <td class="muted">TLS termination + reverse proxy</td>
+          </tr>
+          {% if enable_turn %}
+          <tr>
+            <td>coturn</td>
+            <td><span class="dot dot--{{ 'green' if turn_up else 'red' }}"></span>{{ 'Up' if turn_up else 'Down' }}</td>
+            <td class="muted">TURN/STUN relay (WebRTC)</td>
+          </tr>
+          {% endif %}
+          <tr>
+            <td>TLS Certificate</td>
+            <td colspan="2" class="mono small">{{ cert_status }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <section class="card card--notice">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" style="flex-shrink:0">
+        <circle cx="10" cy="10" r="9" stroke="#6b7280" stroke-width="2"/>
+        <path d="M10 6v5M10 13v1" stroke="#6b7280" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <p>This add-on does <strong>not</strong> expose your LAN, provide SSH access, or function as a VPN. Only Home Assistant is accessible.</p>
+    </section>
+
+    <footer>
+      <span>Vipsy v{{ version }}</span>
+      <span id="last-refresh">{{ now }}</span>
+    </footer>
+
+  </div>
+  <script>
+    var INGRESS_ENTRY = "{{ ingress_entry }}";
+  </script>
+  <script src="{{ ingress_entry }}/static/app.js"></script>
+</body>
+</html>
