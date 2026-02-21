@@ -7,6 +7,10 @@ CERTFILE=$(jq -r '.certfile // "fullchain.pem"' "$OPTIONS_FILE")
 KEYFILE=$(jq -r '.keyfile // "privkey.pem"' "$OPTIONS_FILE")
 ENABLE_TURN=$(jq -r '.enable_turn // true' "$OPTIONS_FILE")
 TUNNEL_ENABLED=$(jq -r '.tunnel_enabled // false' "$OPTIONS_FILE")
+OPTIONS_SERVICE_KEY=$(jq -r '.service_key // ""' "$OPTIONS_FILE")
+if [ -n "$OPTIONS_SERVICE_KEY" ]; then
+    export VIPSY_SERVICE_KEY="$OPTIONS_SERVICE_KEY"
+fi
 
 SSL_CERT="/ssl/${CERTFILE}"
 SSL_KEY="/ssl/${KEYFILE}"
@@ -45,15 +49,6 @@ export INGRESS_ENTRY
 export HTTPS_HOST_PORT
 export HOST_IP
 export TUNNEL_ENABLED
-
-CF_OPT_TOKEN=$(jq -r '.cf_api_token // ""' "$OPTIONS_FILE")
-CF_OPT_ACCOUNT=$(jq -r '.cf_account_id // ""' "$OPTIONS_FILE")
-CF_OPT_ZONE=$(jq -r '.cf_zone_id // ""' "$OPTIONS_FILE")
-CF_OPT_DOMAIN=$(jq -r '.cf_domain // ""' "$OPTIONS_FILE")
-export VIPSY_CF_TOKEN="${VIPSY_CF_TOKEN:-$CF_OPT_TOKEN}"
-export VIPSY_CF_ACCOUNT_ID="${VIPSY_CF_ACCOUNT_ID:-$CF_OPT_ACCOUNT}"
-export VIPSY_CF_ZONE_ID="${VIPSY_CF_ZONE_ID:-$CF_OPT_ZONE}"
-export VIPSY_CF_DOMAIN="${VIPSY_CF_DOMAIN:-$CF_OPT_DOMAIN}"
 
 build_san() {
     local san="DNS:${DOMAIN:-localhost},IP:127.0.0.1"

@@ -57,9 +57,16 @@
       .catch(function () {});
   }
 
+  var _tunnelTimer = null;
+
+  function schedTunnel(fast) {
+    if (_tunnelTimer) clearTimeout(_tunnelTimer);
+    _tunnelTimer = setTimeout(refreshTunnel, fast ? 3000 : POLL_MS);
+  }
+
   function refreshTunnel() {
     var card = document.getElementById("tunnel-card");
-    if (!card) return;
+    if (!card) { schedTunnel(false); return; }
     fetch(basePath + "api/tunnel")
       .then(function (r) { return r.json(); })
       .then(function (d) {
@@ -116,13 +123,17 @@
         } else if (errEl) {
           errEl.remove();
         }
+        schedTunnel(d.running && !d.healthy);
       })
-      .catch(function () {});
+      .catch(function () { schedTunnel(false); });
   }
+
+  refreshStatus();
+  refreshAccess();
+  refreshTunnel();
 
   setInterval(function () {
     refreshStatus();
     refreshAccess();
-    refreshTunnel();
   }, POLL_MS);
 })();

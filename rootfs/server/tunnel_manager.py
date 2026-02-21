@@ -22,13 +22,9 @@ TUNNEL_FALLBACK_URL_FILE = TUNNEL_DATA_DIR / "tunnel_fallback_url"
 METRICS_URL = "http://127.0.0.1:20241/ready"
 METRICS_FALLBACK_URL = "http://127.0.0.1:20242/ready"
 _QUICK_URL_RE = re.compile(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com")
-_CF_API = "https://api.cloudflare.com/client/v4"
 
-CF_API_TOKEN = os.environ.get("VIPSY_CF_TOKEN", "")
-CF_ACCOUNT_ID = os.environ.get("VIPSY_CF_ACCOUNT_ID", "")
-CF_ZONE_ID = os.environ.get("VIPSY_CF_ZONE_ID", "")
-CF_DOMAIN = os.environ.get("VIPSY_CF_DOMAIN", "")
-HA_CORE_URL = os.environ.get("HA_CORE_URL", "http://homeassistant:8123")
+BACKEND_URL = os.environ.get("VIPSY_BACKEND_URL", "")
+SERVICE_KEY = os.environ.get("VIPSY_SERVICE_KEY", "")
 
 _lock = Lock()
 _process = None
@@ -44,57 +40,39 @@ def is_enabled():
     return os.environ.get("TUNNEL_ENABLED", "false").lower() == "true"
 
 
-def _managed():
-    return bool(CF_API_TOKEN and CF_ACCOUNT_ID and CF_ZONE_ID and CF_DOMAIN)
+def _backend_available():
+    return bool(BACKEND_URL and SERVICE_KEY)
 
 
-_CF_FRIENDLY = {
-    10000: "API token authentication failed — token may be invalid or revoked.",
-    9109: "API token does not have permission for this resource.",
-    7003: "Zone not found — check cf_zone_id.",
-    7000: "Account not found — check cf_account_id.",
-}
-
-
-def _cf(method, path, body=None, _retries=2):
-    last_err = None
-    for attempt in range(_retries + 1):
-        data = json.dumps(body).encode() if body else None
-        req = urllib.request.Request(
-            f"{_CF_API}{path}",
-            data=data,
-            method=method,
-            headers={
-                "Authorization": f"Bearer {CF_API_TOKEN}",
-                "Content-Type": "application/json",
-            },
-        )
-        ctx = ssl.create_default_context()
+def _api(method, path, body=None):
+    url = f"{BACKEND_URL.rstrip('/')}{path}"
+    data = json.dumps(body).encode() if body else None
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {SERVICE_KEY}",
+            "Content-Type": "application/json",
+            "User-Agent": "vipsy-addon/1.0",
+        },
+    )
+    ctx = ssl.create_default_context()
+    try:
+        resp = urllib.request.urlopen(req, context=ctx, timeout=30)
+        return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode(errors="replace")
         try:
-            resp = urllib.request.urlopen(req, context=ctx, timeout=15)
-            return json.loads(resp.read())
-        except urllib.error.HTTPError as e:
-            raw = e.read().decode(errors="replace")
-            friendly = ""
-            try:
-                codes = [err.get("code") for err in json.loads(raw).get("errors", [])]
-                for code in codes:
-                    if code in _CF_FRIENDLY:
-                        friendly = _CF_FRIENDLY[code]
-                        break
-                if not friendly and e.code == 403:
-                    friendly = "Permission denied — check your API token scopes."
-            except Exception:
-                pass
-            msg = friendly or raw
-            last_err = RuntimeError(f"CF {method} {path} HTTP {e.code}: {msg}")
-            if e.code < 500:
-                raise last_err
-        except (urllib.error.URLError, OSError) as e:
-            last_err = RuntimeError(f"CF {method} {path} network error: {e}")
-        if attempt < _retries:
-            time.sleep(2 * (attempt + 1))
-    raise last_err
+            parsed = json.loads(raw)
+            msg = parsed.get("error", raw[:200])
+            code = parsed.get("code", "")
+        except Exception:
+            msg = raw[:200]
+            code = ""
+        raise RuntimeError(f"Backend {method} {path} HTTP {e.code}: {msg} [{code}]")
+    except (urllib.error.URLError, OSError) as e:
+        raise RuntimeError(f"Backend {method} {path} network error: {e}")
 
 
 def _get_or_create_uid():
@@ -107,6 +85,7 @@ def _get_or_create_uid():
         pass
     alphabet = string.ascii_lowercase + string.digits
     uid = "".join(secrets.choice(alphabet) for _ in range(8))
+    _ensure_dirs()
     TUNNEL_UID_FILE.write_text(uid)
     TUNNEL_UID_FILE.chmod(0o600)
     return uid
@@ -121,186 +100,44 @@ def _load_creds():
     return None
 
 
-def _build_hostname(uid):
-    labels = CF_DOMAIN.split(".")
-    if len(labels) >= 3:
-        prefix = labels[0]
-        base = ".".join(labels[1:])
-        return f"{uid}-{prefix}.{base}"
-    return f"{uid}.{CF_DOMAIN}"
-
-
-def _provision():
-    global _provision_error
-    _provision_error = ""
+def _save_creds(creds):
     _ensure_dirs()
-    uid = _get_or_create_uid()
-    hostname = _build_hostname(uid)
-    tunnel_name = f"vipsy-{uid}"
-
-    tunnel_id = None
-    connector_token = None
-    try:
-        r = _cf("GET", f"/accounts/{CF_ACCOUNT_ID}/cfd_tunnel?name={tunnel_name}&is_deleted=false")
-        existing = [t for t in r.get("result", []) if t.get("name") == tunnel_name]
-        if existing:
-            tunnel_id = existing[0]["id"]
-    except Exception:
-        pass
-
-    if not tunnel_id:
-        r = _cf("POST", f"/accounts/{CF_ACCOUNT_ID}/cfd_tunnel", {
-            "name": tunnel_name,
-            "config_src": "cloudflare",
-        })
-        if not r.get("success"):
-            raise RuntimeError(f"Tunnel create failed: {r.get('errors')}")
-        tunnel_id = r["result"]["id"]
-        connector_token = r["result"].get("token")
-
-    if not connector_token:
-        r = _cf("GET", f"/accounts/{CF_ACCOUNT_ID}/cfd_tunnel/{tunnel_id}/token")
-        tok = r.get("result", "")
-        connector_token = tok if isinstance(tok, str) else str(tok)
-
-    if not connector_token:
-        raise RuntimeError("Could not obtain tunnel connector token")
-
-    _cf("PUT", f"/accounts/{CF_ACCOUNT_ID}/cfd_tunnel/{tunnel_id}/configurations", {
-        "config": {
-            "ingress": [
-                {
-                    "hostname": hostname,
-                    "service": "https://localhost:443",
-                    "originRequest": {"noTLSVerify": True},
-                },
-                {"service": "http_status:404"},
-            ]
-        }
-    })
-
-    creds = {
-        "uid": uid,
-        "tunnel_id": tunnel_id,
-        "connector_token": connector_token,
-        "hostname": hostname,
-        "url": f"https://{hostname}",
-        "dns_ok": False,
-    }
     TUNNEL_CREDS_FILE.write_text(json.dumps(creds))
     TUNNEL_CREDS_FILE.chmod(0o600)
-    TUNNEL_URL_FILE.write_text(creds["url"])
-    _ensure_dns(creds)
-    return creds
-
-
-def _ensure_dns(creds):
-    if creds.get("dns_ok"):
-        return
-    if not _managed():
-        return
-    hostname = creds.get("hostname")
-    tunnel_id = creds.get("tunnel_id")
-    if not hostname or not tunnel_id:
-        return
-    cname_content = f"{tunnel_id}.cfargotunnel.com"
-    try:
-        resp = _cf("GET", f"/zones/{CF_ZONE_ID}/dns_records?name={hostname}&type=CNAME")
-        records = resp.get("result", [])
-        if records:
-            _cf("PUT", f"/zones/{CF_ZONE_ID}/dns_records/{records[0]['id']}", {
-                "type": "CNAME", "name": hostname,
-                "content": cname_content, "proxied": True, "ttl": 1,
-            })
-        else:
-            _cf("POST", f"/zones/{CF_ZONE_ID}/dns_records", {
-                "type": "CNAME", "name": hostname,
-                "content": cname_content, "proxied": True, "ttl": 1,
-            })
-        creds["dns_ok"] = True
-        TUNNEL_CREDS_FILE.write_text(json.dumps(creds))
-    except RuntimeError as exc:
-        global _provision_error
-        msg = str(exc)
-        if "403" in msg or "Permission denied" in msg or "authentication" in msg.lower():
-            _provision_error = (
-                "DNS setup failed (403): your API token is missing Zone DNS Edit "
-                "permission. Edit your token in Cloudflare and add Zone:DNS:Edit."
-            )
-        else:
-            _provision_error = f"DNS setup failed: {msg}"
-    except Exception:
-        pass
-
-
-def _ensure_ingress(creds):
-    hostname = creds.get("hostname")
-    tunnel_id = creds.get("tunnel_id")
-    if not hostname or not tunnel_id:
-        return
-    try:
-        _cf("PUT", f"/accounts/{CF_ACCOUNT_ID}/cfd_tunnel/{tunnel_id}/configurations", {
-            "config": {
-                "ingress": [
-                    {
-                        "hostname": hostname,
-                        "service": "https://localhost:443",
-                        "originRequest": {"noTLSVerify": True},
-                    },
-                    {"service": "http_status:404"},
-                ]
-            }
-        })
-    except Exception:
-        pass
-
-
-def _migrate_creds(creds):
-    uid = creds.get("uid", "")
-    if not uid:
-        return creds
-    expected = _build_hostname(uid)
-    old_hostname = creds.get("hostname", "")
-    if old_hostname and old_hostname != expected:
-        try:
-            resp = _cf("GET", f"/zones/{CF_ZONE_ID}/dns_records?name={old_hostname}&type=CNAME")
-            for rec in resp.get("result", []):
-                try:
-                    _cf("DELETE", f"/zones/{CF_ZONE_ID}/dns_records/{rec['id']}")
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        creds["hostname"] = expected
-        creds["url"] = f"https://{expected}"
-        creds["dns_ok"] = False
-        TUNNEL_CREDS_FILE.write_text(json.dumps(creds))
+    if creds.get("url"):
         TUNNEL_URL_FILE.write_text(creds["url"])
+
+
+def _register():
+    global _provision_error
+    uid = _get_or_create_uid()
+    resp = _api("POST", "/tunnel/register", {"instance_id": uid})
+    if not resp.get("ok"):
+        msg = resp.get("error", "Registration failed")
+        _provision_error = msg
+        raise RuntimeError(msg)
+    data = resp["data"]
+    creds = {
+        "uid": uid,
+        "tunnel_id": data["tunnel_id"],
+        "connector_token": data["connector_token"],
+        "hostname": data["hostname"],
+        "url": data["url"],
+        "dns_ok": data.get("dns_ok", False),
+    }
+    _save_creds(creds)
     return creds
 
 
 def deprovision():
     stop()
-    creds = _load_creds()
-    if not creds or not _managed():
+    if not _backend_available():
         return
-    tunnel_id = creds.get("tunnel_id")
-    hostname = creds.get("hostname")
-    if tunnel_id:
-        try:
-            _cf("DELETE", f"/accounts/{CF_ACCOUNT_ID}/cfd_tunnel/{tunnel_id}?cascade=true")
-        except Exception:
-            pass
-    if hostname:
-        try:
-            resp = _cf("GET", f"/zones/{CF_ZONE_ID}/dns_records?name={hostname}")
-            for rec in resp.get("result", []):
-                try:
-                    _cf("DELETE", f"/zones/{CF_ZONE_ID}/dns_records/{rec['id']}")
-                except Exception:
-                    pass
-        except Exception:
-            pass
+    uid = _get_or_create_uid()
+    try:
+        _api("POST", "/tunnel/deregister", {"instance_id": uid})
+    except Exception:
+        pass
     TUNNEL_CREDS_FILE.unlink(missing_ok=True)
     TUNNEL_URL_FILE.unlink(missing_ok=True)
 
@@ -354,6 +191,7 @@ def _start_fallback():
     global _fallback_process
     if _is_fallback_running():
         return
+    _ensure_dirs()
     TUNNEL_FALLBACK_URL_FILE.unlink(missing_ok=True)
     log_fd = open(TUNNEL_FALLBACK_LOG_FILE, "w")
     try:
@@ -409,7 +247,7 @@ def is_running():
 def is_healthy():
     if not is_running():
         return False
-    if _managed():
+    if _backend_available() and _load_creds():
         try:
             resp = urllib.request.urlopen(METRICS_URL, timeout=3)
             return resp.status == 200
@@ -428,14 +266,10 @@ def start():
         _ensure_dirs()
         log_fd = open(TUNNEL_LOG_FILE, "w")
         try:
-            if _managed():
+            if _backend_available():
                 creds = _load_creds()
                 if not creds:
-                    creds = _provision()
-                else:
-                    creds = _migrate_creds(creds)
-                    _ensure_ingress(creds)
-                    _ensure_dns(creds)
+                    creds = _register()
                 TUNNEL_URL_FILE.write_text(creds["url"])
                 cmd = [
                     "cloudflared", "tunnel",
@@ -454,7 +288,7 @@ def start():
             _process = subprocess.Popen(cmd, stdout=log_fd, stderr=log_fd)
             log_fd.close()
             TUNNEL_PID_FILE.write_text(str(_process.pid))
-            if _managed():
+            if _backend_available():
                 _start_fallback()
             return True
         except Exception as exc:
@@ -516,10 +350,9 @@ def status():
         url = _parse_quick_url() if running else None
         hostname = url.replace("https://", "").strip("/") if url else None
         uid = get_unique_id()
-        fallback_url = None
     return {
         "enabled": is_enabled(),
-        "managed": _managed(),
+        "managed": _backend_available(),
         "running": running,
         "healthy": healthy,
         "mode": mode,

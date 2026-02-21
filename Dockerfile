@@ -1,15 +1,13 @@
 ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-python:3.11-alpine3.18
 FROM ${BUILD_FROM}
 
-ARG VIPSY_CF_TOKEN=""
-ARG VIPSY_CF_ACCOUNT_ID=""
-ARG VIPSY_CF_ZONE_ID=""
-ARG VIPSY_CF_DOMAIN=""
+ARG VIPSY_BACKEND_URL="https://vipsy-backend.nitinexus.workers.dev"
+ARG VIPSY_SERVICE_KEY=""
+# VIPSY_SERVICE_KEY is intentionally left empty here; it is set at runtime
+# via the add-on option "service_key" in /data/options.json (run.sh reads it).
 
-ENV VIPSY_CF_TOKEN=${VIPSY_CF_TOKEN} \
-    VIPSY_CF_ACCOUNT_ID=${VIPSY_CF_ACCOUNT_ID} \
-    VIPSY_CF_ZONE_ID=${VIPSY_CF_ZONE_ID} \
-    VIPSY_CF_DOMAIN=${VIPSY_CF_DOMAIN}
+ENV VIPSY_BACKEND_URL=${VIPSY_BACKEND_URL} \
+    VIPSY_SERVICE_KEY=${VIPSY_SERVICE_KEY}
 
 RUN apk add --no-cache \
     caddy \
