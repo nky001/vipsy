@@ -22,8 +22,42 @@
           {{ 'Running' if caddy_up else 'Stopped' }}
         </span>
         <span class="pill pill--{{ 'blue' if mode == 'Remote' else 'gray' }}">{{ mode }}</span>
+        {% if backend_available %}
+        <span class="auth-btn-wrap" id="auth-wrap">
+          <span class="pill pill--green" id="auth-email" title="Signed in" {% if not logged_in %}style="display:none"{% endif %}>&#x25cf;</span>
+          <a href="{{ ingress_entry }}/logout" class="auth-link" id="auth-logout" {% if not logged_in %}style="display:none"{% endif %}>Sign out</a>
+          <a href="#" class="btn btn--sm btn--google" id="auth-login" {% if logged_in %}style="display:none"{% endif %}>
+            <svg width="16" height="16" viewBox="0 0 48 48"><path fill="#4285F4" d="M44.5 20H24v8.5h11.7C34.7 33.9 30.1 37 24 37c-7.2 0-13-5.8-13-13s5.8-13 13-13c3.1 0 5.9 1.1 8.1 2.9l6.4-6.4C34.5 4.1 29.6 2 24 2 12.9 2 4 10.9 4 22s8.9 20 20 20c11.2 0 19.3-7.9 19.8-18.8.1-.7.2-1.5.2-2.2 0-.7-.1-1.3-.2-2z"/><path fill="#34A853" d="M6.3 14.7l7 5.1C15.2 16 19.2 13 24 13c3.1 0 5.9 1.1 8.1 2.9l6.4-6.4C34.5 4.1 29.6 2 24 2 16 2 9.2 6.7 6.3 14.7z"/><path fill="#FBBC05" d="M24 44c5.2 0 9.9-1.7 13.4-4.6l-6.6-5.4C28.7 35.9 26.5 37 24 37c-6.1 0-10.7-3.1-11.7-8.5l-7 5.4C8.2 41.3 15.5 44 24 44z"/><path fill="#EA4335" d="M44.5 20H24v8.5h11.7c-.8 2.8-2.5 5-4.8 6.6l6.6 5.4C40.5 37.7 44 30.4 44 22c0-.7-.1-1.3-.2-2z"/></svg>
+            Sign in
+          </a>
+        </span>
+        {% endif %}
       </div>
     </header>
+
+    {% if auth_error %}
+    <div class="card card--setup" id="auth-error-banner" style="border-left:3px solid #dc2626;margin-bottom:1rem">
+      <svg width="18" height="18" viewBox="0 0 20 20" fill="none" style="flex-shrink:0;color:#dc2626">
+        <circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="2"/>
+        <path d="M10 6v5M10 13v1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <div>
+        <strong>Sign-in failed</strong><br>
+        <span class="small muted">{{ auth_error }}</span>
+      </div>
+    </div>
+    {% else %}
+    <div class="card card--setup" id="auth-error-banner" style="border-left:3px solid #dc2626;margin-bottom:1rem;display:none">
+      <svg width="18" height="18" viewBox="0 0 20 20" fill="none" style="flex-shrink:0;color:#dc2626">
+        <circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="2"/>
+        <path d="M10 6v5M10 13v1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <div>
+        <strong>Sign-in failed</strong><br>
+        <span class="small muted" id="auth-error-msg"></span>
+      </div>
+    </div>
+    {% endif %}
 
     {% if tunnel.enabled %}
     <section class="section-title">Secure Tunnel</section>
@@ -38,16 +72,20 @@
         </span>
       </div>
       <div class="tunnel-card__body">
-        {% if tunnel.hostname %}
+        <div id="tunnel-quick-url-row" {% if tunnel.mode != 'quick' or not tunnel.url %}style="display:none"{% endif %} class="access-row">
+          <span class="access-label">URL</span>
+          <a href="{{ tunnel.url or '#' }}" target="_blank" rel="noopener" class="access-link" id="tunnel-url">{{ tunnel.url or '' }}</a>
+        </div>
+        <div id="tunnel-static-info" {% if tunnel.mode != 'static' or not logged_in %}style="display:none"{% endif %}>
         <div class="access-row">
           <span class="access-label">Hostname</span>
-          <span class="access-value mono" id="tunnel-hostname">{{ tunnel.hostname }}</span>
+          <span class="access-value mono" id="tunnel-hostname">{{ tunnel.hostname or '\u2014' }}</span>
         </div>
         <div class="access-row">
           <span class="access-label">URL</span>
-          <a href="{{ tunnel.url }}" target="_blank" rel="noopener" class="access-link" id="tunnel-url">{{ tunnel.url }}</a>
+          <a href="{{ tunnel.url or '#' }}" target="_blank" rel="noopener" class="access-link" id="tunnel-static-url">{{ tunnel.url or '' }}</a>
         </div>
-        {% endif %}
+        </div>
         {% if tunnel.fallback_url %}
         <div class="access-row" id="tunnel-fallback-row">
           <span class="access-label">Temp URL <span class="pill pill--gray" style="font-size:.65rem;padding:.1rem .4rem">now</span></span>
@@ -268,6 +306,10 @@
   </div>
   <script>
     var INGRESS_ENTRY = "{{ ingress_entry }}";
+    var BACKEND_AVAILABLE = {{ 'true' if backend_available else 'false' }};
+    var LOGGED_IN = {{ 'true' if logged_in else 'false' }};
+    var BACKEND_URL = "{{ backend_url }}";
+    var INSTANCE_ID = "{{ instance_id }}";
   </script>
   <script src="{{ ingress_entry }}/static/app.js"></script>
 </body>

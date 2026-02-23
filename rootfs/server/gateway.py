@@ -6,10 +6,11 @@ import subprocess
 import socket
 import time
 import urllib.request
+import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request, redirect
 
 import threading
 import tunnel_manager
@@ -19,6 +20,8 @@ INGRESS_PORT = int(os.environ.get("INGRESS_PORT", 8099))
 HA_CORE_HOST = os.environ.get("HA_CORE_HOST", "homeassistant")
 HA_CORE_PORT = int(os.environ.get("HA_CORE_PORT", 8123))
 HTTPS_HOST_PORT = int(os.environ.get("HTTPS_HOST_PORT", 443))
+AUTH_TOKEN_PATH = Path("/data/auth_token")
+BACKEND_URL = os.environ.get("VIPSY_BACKEND_URL", "")
 
 
 def load_options():
@@ -230,30 +233,7 @@ app = Flask(
 
 @app.route("/")
 def index():
-    domain = options.get("domain", "")
-    enable_turn = options.get("enable_turn", True)
-    cert_path = os.environ.get("TLS_CERT", f"/ssl/{options.get('certfile', 'fullchain.pem')}")
-
-    caddy_up = _service_running("caddy")
-    turn_up = _service_running("turnserver") if enable_turn else None
-    cert_status = _cert_expiry(cert_path)
-    access = _build_access_info(domain)
-
-    tunnel = tunnel_manager.status()
-    return render_template(
-        "index.html",
-        domain=domain,
-        mode="Remote" if domain else "LAN-only",
-        caddy_up=caddy_up,
-        turn_up=turn_up,
-        enable_turn=enable_turn,
-        cert_status=cert_status,
-        access=access,
-        tunnel=tunnel,
-        now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-        ingress_entry=INGRESS_ENTRY,
-        version=options.get("_version", "1.3.4"),
-    )
+    return render_template("index.html", **_index_context())
 
 
 @app.route("/api/health")
@@ -314,6 +294,152 @@ def diagnostics():
         warnings.append("Cloudflare Tunnel is running but not yet healthy — check connectivity or wait a few seconds")
 
     return jsonify(warnings=warnings, count=len(warnings))
+
+
+def _read_auth_token():
+    try:
+        if AUTH_TOKEN_PATH.exists():
+            tok = AUTH_TOKEN_PATH.read_text().strip()
+            if tok:
+                return tok
+    except Exception:
+        pass
+    return None
+
+
+def _save_auth_token(token):
+    AUTH_TOKEN_PATH.write_text(token)
+    try:
+        AUTH_TOKEN_PATH.chmod(0o600)
+    except Exception:
+        pass
+
+
+def _backend_api(method, path, body=None, token=None):
+    if not BACKEND_URL:
+        return None
+    url = f"{BACKEND_URL.rstrip('/')}{path}"
+    data = json.dumps(body).encode() if body else None
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "vipsy-addon/1.0",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req_obj = urllib.request.Request(url, data=data, method=method, headers=headers)
+    ctx = ssl.create_default_context()
+    try:
+        resp = urllib.request.urlopen(req_obj, context=ctx, timeout=15)
+        return json.loads(resp.read())
+    except Exception:
+        return None
+
+
+@app.route("/oauth/finish")
+def oauth_finish():
+    code = request.args.get("code", "")
+    if not code:
+        return jsonify(ok=False, error="No authorization code received"), 400
+    result = _backend_api("POST", "/auth/exchange", {"code": code})
+    if not result or not result.get("ok"):
+        err_msg = (result or {}).get("error", "Token exchange failed")
+        return jsonify(ok=False, error=err_msg), 400
+    _save_auth_token(result["data"]["token"])
+    tunnel_manager.reload_auth_token()
+    if tunnel_manager.is_enabled():
+        threading.Thread(target=tunnel_manager.try_upgrade_to_static, daemon=True).start()
+    return jsonify(ok=True)
+
+
+@app.route("/api/auth")
+def auth_status():
+    token = _read_auth_token()
+    if not token or not BACKEND_URL:
+        return jsonify(logged_in=False, email=None, sub=None)
+    info = _backend_api("GET", "/auth/me", token=token)
+    if info and info.get("ok"):
+        data = info.get("data", {})
+        return jsonify(logged_in=True, email=data.get("email"), sub=data.get("sub"), tunnel_count=data.get("tunnel_count", 0))
+    return jsonify(logged_in=False, email=None, sub=None)
+
+
+@app.route("/api/auth/begin")
+def auth_begin():
+    if not BACKEND_URL:
+        return jsonify(ok=False, error="Backend not configured"), 503
+    uid = tunnel_manager.get_unique_id() or ""
+    if not uid:
+        try:
+            uid = tunnel_manager._get_or_create_uid()
+        except Exception:
+            pass
+    if not uid:
+        return jsonify(ok=False, error="Instance ID unavailable"), 503
+    result = _backend_api("GET", f"/auth/google?instance_id={urllib.parse.quote(uid)}&mode=poll")
+    if not result or not result.get("ok"):
+        return jsonify(ok=False, error="Failed to start OAuth flow"), 502
+    data = result.get("data", {})
+    return jsonify(ok=True, state=data.get("state"), auth_url=data.get("auth_url"))
+
+
+@app.route("/api/auth/poll")
+def auth_poll():
+    if not BACKEND_URL:
+        return jsonify(ok=False, error="Backend not configured"), 503
+    state = request.args.get("state", "")
+    if not state or len(state) < 32:
+        return jsonify(ok=True, ready=False)
+    result = _backend_api("GET", f"/auth/poll?state={urllib.parse.quote(state)}")
+    if not result or not result.get("ok"):
+        return jsonify(ok=True, ready=False)
+    data = result.get("data", {})
+    if data.get("ready"):
+        return jsonify(ok=True, ready=True, exchange_code=data.get("exchange_code"))
+    return jsonify(ok=True, ready=False)
+
+
+@app.route("/logout")
+def logout():
+    AUTH_TOKEN_PATH.unlink(missing_ok=True)
+    tunnel_manager.reload_auth_token()
+    return redirect(f"{INGRESS_ENTRY}/")
+
+
+def _index_context(**extra):
+    domain = options.get("domain", "")
+    enable_turn = options.get("enable_turn", True)
+    cert_path = os.environ.get("TLS_CERT", f"/ssl/{options.get('certfile', 'fullchain.pem')}")
+    caddy_up = _service_running("caddy")
+    turn_up = _service_running("turnserver") if enable_turn else None
+    cert_status = _cert_expiry(cert_path)
+    access = _build_access_info(domain)
+    tunnel = tunnel_manager.status()
+    auth_token = _read_auth_token()
+    uid = tunnel_manager.get_unique_id() or ""
+    if not uid:
+        try:
+            uid = tunnel_manager._get_or_create_uid()
+        except Exception:
+            pass
+    return dict(
+        domain=domain,
+        mode="Remote" if domain else "LAN-only",
+        caddy_up=caddy_up,
+        turn_up=turn_up,
+        enable_turn=enable_turn,
+        cert_status=cert_status,
+        access=access,
+        tunnel=tunnel,
+        now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        ingress_entry=INGRESS_ENTRY,
+        version=options.get("_version", "1.3.8"),
+        logged_in=bool(auth_token),
+        backend_available=bool(BACKEND_URL),
+        backend_url=BACKEND_URL,
+        instance_id=uid,
+        auth_error=None,
+        **extra,
+    )
 
 
 if __name__ == "__main__":

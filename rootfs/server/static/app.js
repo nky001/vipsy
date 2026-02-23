@@ -1,5 +1,7 @@
 (function () {
   var POLL_MS = 20000;
+  var _loggedIn = window.LOGGED_IN;
+  var _tunnelMode = "";
 
   function setText(id, val) {
     var el = document.getElementById(id);
@@ -12,6 +14,82 @@
   }
 
   var basePath = (window.INGRESS_ENTRY || "").replace(/\/$/, "") + "/";
+
+  function toggleStaticUrl() {
+    var el = document.getElementById("tunnel-static-info");
+    if (el) el.style.display = (_loggedIn && _tunnelMode === "static") ? "" : "none";
+    var qRow = document.getElementById("tunnel-quick-url-row");
+    if (qRow) qRow.style.display = (_tunnelMode === "quick") ? "" : "none";
+  }
+
+  function showAuthError(msg) {
+    var banner = document.getElementById("auth-error-banner");
+    var msgEl = document.getElementById("auth-error-msg");
+    if (banner && msgEl) {
+      msgEl.textContent = msg;
+      banner.style.display = "";
+      setTimeout(function () { banner.style.display = "none"; }, 8000);
+    }
+  }
+
+  var _pollTimer = null;
+
+  function stopAuthPoll() {
+    if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+  }
+
+  function startAuthPoll(state, deadline) {
+    _pollTimer = setInterval(function () {
+      if (Date.now() > deadline) {
+        stopAuthPoll();
+        showAuthError("Sign-in timed out — please try again");
+        return;
+      }
+      fetch(basePath + "api/auth/poll?state=" + encodeURIComponent(state))
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (!d.ready) return;
+          stopAuthPoll();
+          fetch(basePath + "oauth/finish?code=" + encodeURIComponent(d.exchange_code))
+            .then(function (r) { return r.json(); })
+            .then(function (fd) {
+              if (fd.ok) {
+                _loggedIn = true;
+                window.LOGGED_IN = true;
+                refreshAuth();
+                schedTunnel(true);
+              } else {
+                showAuthError(fd.error || "Sign-in failed");
+              }
+            })
+            .catch(function () { showAuthError("Network error during sign-in"); });
+        })
+        .catch(function () {});
+    }, 2000);
+  }
+
+  function openLogin() {
+    stopAuthPoll();
+    fetch(basePath + "api/auth/begin")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok || !d.state || !d.auth_url) {
+          showAuthError(d.error || "Failed to start sign-in");
+          return;
+        }
+        window.open(d.auth_url, "_blank");
+        startAuthPoll(d.state, Date.now() + 300000);
+      })
+      .catch(function () { showAuthError("Failed to start sign-in"); });
+  }
+
+  var loginBtn = document.getElementById("auth-login");
+  if (loginBtn) {
+    loginBtn.addEventListener("click", function (e) {
+      e.preventDefault();
+      openLogin();
+    });
+  }
 
   function refreshAccess() {
     fetch(basePath + "api/access")
@@ -83,12 +161,21 @@
             st.className = "access-status access-status--err";
           }
         }
-        setText("tunnel-hostname", d.hostname || "\u2014");
         setText("tunnel-uid", d.unique_id || "\u2014");
-        var urlEl = document.getElementById("tunnel-url");
-        if (urlEl && d.url) {
-          urlEl.textContent = d.url;
-          urlEl.href = d.url;
+        if (d.mode) _tunnelMode = d.mode;
+        if (d.mode === "quick") {
+          var qRow = document.getElementById("tunnel-quick-url-row");
+          var urlEl = document.getElementById("tunnel-url");
+          if (d.url) {
+            if (urlEl) { urlEl.textContent = d.url; urlEl.href = d.url; }
+            if (qRow) qRow.style.display = "";
+          } else {
+            if (qRow) qRow.style.display = "none";
+          }
+        } else if (d.mode === "static") {
+          setText("tunnel-hostname", d.hostname || "\u2014");
+          var sUrlEl = document.getElementById("tunnel-static-url");
+          if (sUrlEl && d.url) { sUrlEl.textContent = d.url; sUrlEl.href = d.url; }
         }
         var fbRow = document.getElementById("tunnel-fallback-row");
         var fbEl = document.getElementById("tunnel-fallback-url");
@@ -109,6 +196,8 @@
         if (hWarn) hWarn.style.display = (!d.healthy && d.running) ? "" : "none";
         if (hErr) hErr.style.display = (!d.healthy && !d.running) ? "" : "none";
 
+        toggleStaticUrl();
+
         var errEl = document.querySelector("#tunnel-card .tunnel-error");
         if (d.error) {
           if (!errEl) {
@@ -128,12 +217,45 @@
       .catch(function () { schedTunnel(false); });
   }
 
+  function refreshAuth() {
+    if (!window.BACKEND_AVAILABLE) return;
+    fetch(basePath + "api/auth")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var wrap = document.getElementById("auth-wrap");
+        if (!wrap) return;
+        var emailEl = document.getElementById("auth-email");
+        var loginEl = document.getElementById("auth-login");
+        var logoutEl = document.getElementById("auth-logout");
+        _loggedIn = d.logged_in;
+        window.LOGGED_IN = d.logged_in;
+        if (d.logged_in) {
+          if (emailEl) {
+            emailEl.textContent = d.email || "Signed in";
+            emailEl.title = d.email || "Signed in";
+            emailEl.style.display = "";
+          }
+          if (logoutEl) logoutEl.style.display = "";
+          if (loginEl) loginEl.style.display = "none";
+        } else {
+          if (emailEl) emailEl.style.display = "none";
+          if (logoutEl) logoutEl.style.display = "none";
+          if (loginEl) loginEl.style.display = "";
+        }
+        toggleStaticUrl();
+      })
+      .catch(function () {});
+  }
+
   refreshStatus();
   refreshAccess();
   refreshTunnel();
+  refreshAuth();
 
   setInterval(function () {
     refreshStatus();
     refreshAccess();
   }, POLL_MS);
+
+  setInterval(refreshAuth, 60000);
 })();

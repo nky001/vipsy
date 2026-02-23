@@ -25,11 +25,33 @@ _QUICK_URL_RE = re.compile(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com")
 
 BACKEND_URL = os.environ.get("VIPSY_BACKEND_URL", "")
 SERVICE_KEY = os.environ.get("VIPSY_SERVICE_KEY", "")
+AUTH_TOKEN_PATH = Path("/data/auth_token")
 
 _lock = Lock()
 _process = None
 _fallback_process = None
 _provision_error: str = ""
+_auth_token_cache: str = ""
+
+
+def _get_bearer_token():
+    global _auth_token_cache
+    if _auth_token_cache:
+        return _auth_token_cache
+    try:
+        if AUTH_TOKEN_PATH.exists():
+            tok = AUTH_TOKEN_PATH.read_text().strip()
+            if tok:
+                _auth_token_cache = tok
+                return tok
+    except Exception:
+        pass
+    return SERVICE_KEY
+
+
+def reload_auth_token():
+    global _auth_token_cache
+    _auth_token_cache = ""
 
 
 def _ensure_dirs():
@@ -41,18 +63,19 @@ def is_enabled():
 
 
 def _backend_available():
-    return bool(BACKEND_URL and SERVICE_KEY)
+    return bool(BACKEND_URL and _get_bearer_token())
 
 
 def _api(method, path, body=None):
     url = f"{BACKEND_URL.rstrip('/')}{path}"
     data = json.dumps(body).encode() if body else None
+    bearer = _get_bearer_token()
     req = urllib.request.Request(
         url,
         data=data,
         method=method,
         headers={
-            "Authorization": f"Bearer {SERVICE_KEY}",
+            "Authorization": f"Bearer {bearer}",
             "Content-Type": "application/json",
             "User-Agent": "vipsy-addon/1.0",
         },
@@ -330,6 +353,20 @@ def stop():
 
 
 def restart():
+    stop()
+    time.sleep(1)
+    return start()
+
+
+def try_upgrade_to_static():
+    if not is_enabled():
+        return False
+    if not _backend_available():
+        return False
+    if _load_creds():
+        return False
+    if not is_running():
+        return start()
     stop()
     time.sleep(1)
     return start()
