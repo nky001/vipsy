@@ -2,17 +2,16 @@ ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-python:3.11-alpine3.18
 FROM ${BUILD_FROM}
 
 ARG VIPSY_BACKEND_URL="https://vipsy-backend.nitinexus.workers.dev"
-ARG VIPSY_SERVICE_KEY=""
-# VIPSY_SERVICE_KEY is intentionally left empty here; it is set at runtime
-# via the add-on option "service_key" in /data/options.json (run.sh reads it).
 
-ENV VIPSY_BACKEND_URL=${VIPSY_BACKEND_URL} \
-    VIPSY_SERVICE_KEY=${VIPSY_SERVICE_KEY}
+ENV VIPSY_BACKEND_URL=${VIPSY_BACKEND_URL}
 
 RUN apk add --no-cache \
     caddy \
     coturn \
     nftables \
+    wireguard-tools \
+    iproute2 \
+    iptables \
     curl \
     jq \
     openssl \
@@ -36,7 +35,9 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.
 COPY rootfs /
 COPY logo.png /server/static/logo.png
 
-RUN sed -i 's/\r$//' /run.sh \
+RUN find /run.sh /caddy /server /coturn -type f \( -name '*.sh' -o -name '*.conf' -o -name '*.py' \) \
+    -exec sed -i 's/\r$//' {} + \
+    && sed -i 's/\r$//' /run.sh \
     && chmod +x /run.sh
 
 ENTRYPOINT ["/run.sh"]

@@ -20,9 +20,13 @@
       "name": "Enable Tunnel",
       "description": "Enable Cloudflare Tunnel for secure remote access without port forwarding. A unique subdomain is automatically provisioned."
     },
-    "service_key": {
-      "name": "Service Key",
-      "description": "API key for the Vipsy backend service. Required for automatic tunnel provisioning. Leave empty to use ephemeral trycloudflare.com URLs instead."
+    "vpn_subnet": {
+      "name": "VPN Subnet",
+      "description": "WireGuard VPN subnet (default 10.8.0.0/24). Change only if it conflicts with your LAN."
+    },
+    "vpn_port": {
+      "name": "VPN Port",
+      "description": "WireGuard listen port (default 51820). Must match the port forwarded on your router."
     }
   }
 }

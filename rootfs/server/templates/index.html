@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Vipsy — Status</title>
-  <link rel="stylesheet" href="{{ ingress_entry }}/static/style.css">
+  <link rel="stylesheet" href="{{ ingress_entry }}/static/style.css?v={{ version }}">
 </head>
 <body>
   <div class="container">
@@ -230,6 +230,246 @@
 
     </div>
 
+    <section class="section-title">Local VPN <span class="small muted" style="font-weight:400;font-size:.75rem">(same network — requires port forwarding for remote)</span></section>
+    <div class="vpn-card {{ 'vpn-card--ok' if vpn.enabled else 'vpn-card--off' }}" id="vpn-card">
+      <div class="vpn-card__header">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+          <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+        </svg>
+        <span>WireGuard VPN</span>
+        <span class="access-status {{ 'access-status--ok' if vpn.enabled else 'access-status--neutral' }}" id="vpn-status">
+          {% if vpn.enabled %}✓ Active{% else %}○ Inactive{% endif %}
+        </span>
+      </div>
+      <div class="vpn-card__body">
+        <div class="vpn-controls">
+          {% if vpn.enabled %}
+          <button class="btn btn--sm btn--red" id="vpn-disable-btn" onclick="vpnDisable()">Disable VPN</button>
+          {% else %}
+          <button class="btn btn--sm btn--green" id="vpn-enable-btn" onclick="vpnEnable()">Enable VPN</button>
+          {% endif %}
+          {% if vpn.enabled %}
+          <button class="btn btn--sm btn--danger" id="vpn-kill-btn" onclick="vpnKill()" title="Remove all peers and shut down VPN immediately">Kill Switch</button>
+          {% endif %}
+        </div>
+        {% if vpn.enabled %}
+        <div class="access-row">
+          <span class="access-label">Subnet</span>
+          <span class="access-value mono">{{ vpn.subnet }}</span>
+        </div>
+        <div class="access-row">
+          <span class="access-label">Port</span>
+          <span class="access-value mono">{{ vpn.port }}/udp</span>
+        </div>
+        <div class="access-row">
+          <span class="access-label">Server IP</span>
+          <span class="access-value mono">{{ vpn.server_ip }}</span>
+        </div>
+        <div class="access-row">
+          <span class="access-label">LAN Subnet</span>
+          <span class="access-value mono">{{ vpn.lan_subnet }}</span>
+        </div>
+        <div class="access-row">
+          <span class="access-label">Peers</span>
+          <span class="access-value" id="vpn-peer-count">{{ vpn.peer_count }} total, {{ vpn.connected_count }} connected</span>
+        </div>
+        {% if vpn.overlap_warning %}
+        <div class="vpn-warning">⚠ {{ vpn.overlap_warning }}</div>
+        {% endif %}
+        {% endif %}
+      </div>
+      {% if vpn.enabled %}
+      <div class="vpn-card__hint vpn-card__hint--ok">
+        VPN is active — peers can access your LAN via split-tunnel.
+      </div>
+      {% else %}
+      <div class="vpn-card__hint vpn-card__hint--neutral">
+        VPN is disabled. Enable it to allow peers to join your LAN securely.
+      </div>
+      {% endif %}
+    </div>
+
+    {% if vpn.enabled %}
+    <div class="vpn-peers-section">
+      <div class="vpn-peers-header">
+        <span class="section-title" style="margin:0">Peers</span>
+        <button class="btn btn--sm btn--blue" id="vpn-add-peer-toggle" onclick="toggleAddPeer()">+ Add Peer</button>
+      </div>
+
+      <div class="card vpn-add-form" id="vpn-add-form" style="display:none">
+        <div class="form-group">
+          <label for="peer-name">Name</label>
+          <input type="text" id="peer-name" placeholder="e.g. Phone, Laptop" maxlength="64" class="form-input">
+        </div>
+        <div class="form-group">
+          <label for="peer-ttl">Expires in (hours, 0 = never)</label>
+          <input type="number" id="peer-ttl" value="0" min="0" max="8760" class="form-input">
+        </div>
+        <div class="form-group form-check">
+          <input type="checkbox" id="peer-persistent">
+          <label for="peer-persistent">Persistent (survives restarts even if expired)</label>
+        </div>
+        <button class="btn btn--blue" id="vpn-add-peer-btn" onclick="vpnAddPeer()">Create Peer</button>
+      </div>
+
+      <div id="vpn-peer-result" style="display:none" class="card vpn-peer-result">
+        <div class="vpn-peer-result__header">
+          <strong>Peer created</strong>
+          <button class="btn btn--sm" onclick="document.getElementById('vpn-peer-result').style.display='none'">✕</button>
+        </div>
+        <div class="form-group">
+          <label>LAN Config <span class="muted small">(same network)</span></label>
+          <pre class="setup-code" id="vpn-peer-config-text" style="max-height:180px;overflow:auto"></pre>
+        </div>
+        <div class="vpn-peer-actions">
+          <button class="btn btn--sm btn--blue" onclick="copyPeerConfig()">Copy LAN Config</button>
+          <a class="btn btn--sm" id="vpn-peer-dl-link" href="#" download>⬇ LAN .conf</a>
+          <a class="btn btn--sm" id="vpn-peer-qr-link" href="#" target="_blank">QR</a>
+        </div>
+        <div id="vpn-peer-qr-img" style="text-align:center;margin-top:.5rem"></div>
+        <div id="vpn-remote-block" style="display:none;margin-top:.75rem;border-top:1px solid var(--border);padding-top:.75rem">
+          <div class="form-group">
+            <label>Remote Config <span class="muted small">(outside network — requires port forwarding)</span></label>
+            <pre class="setup-code" id="vpn-peer-remote-config-text" style="max-height:180px;overflow:auto"></pre>
+          </div>
+          <div class="vpn-peer-actions">
+            <a class="btn btn--sm" id="vpn-peer-dl-remote" href="#" download>⬇ Remote .conf</a>
+            <a class="btn btn--sm" id="vpn-peer-qr-remote" href="#" target="_blank">QR</a>
+          </div>
+        </div>
+      </div>
+
+      <div id="vpn-peers-list">
+        {% if vpn_peers %}
+        <table class="vpn-peers-table">
+          <thead>
+            <tr><th>Name</th><th>IP</th><th>Status</th><th>Expires</th><th></th></tr>
+          </thead>
+          <tbody id="vpn-peers-tbody">
+            {% for p in vpn_peers %}
+            <tr id="peer-row-{{ p.peer_id }}">
+              <td>{{ p.name }}</td>
+              <td class="mono">{{ p.vpn_ip }}</td>
+              <td>
+                <span class="dot dot--{{ 'green' if p.connected else 'gray' }}"></span>
+                {{ 'Connected' if p.connected else 'Idle' }}
+              </td>
+              <td class="mono small">{{ p.expires_at[:16] if p.expires_at else 'Never' }}</td>
+              <td>
+                <a href="{{ ingress_entry }}/api/vpn/peers/{{ p.peer_id }}/config?network=lan" class="btn btn--sm" title="LAN config">⬇ LAN</a>
+                <a href="{{ ingress_entry }}/api/vpn/peers/{{ p.peer_id }}/config?network=remote" class="btn btn--sm" title="Remote config">⬇ WAN</a>
+                <a href="{{ ingress_entry }}/api/vpn/peers/{{ p.peer_id }}/qr?network=lan" class="btn btn--sm" target="_blank" title="LAN QR">◻</a>
+                <button class="btn btn--sm btn--red" onclick="vpnRemovePeer('{{ p.peer_id }}')" title="Remove peer">✕</button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="card muted small" id="vpn-no-peers" style="text-align:center;padding:1.5rem">No peers yet. Click <strong>+ Add Peer</strong> to create one.</div>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    <section class="section-title">Remote Access VPN <span class="small muted" style="font-weight:400;font-size:.75rem">(no port forwarding needed)</span></section>
+    {% if not backend_available %}
+    <div class="card card--setup">
+      <svg width="18" height="18" viewBox="0 0 20 20" fill="none" style="flex-shrink:0;color:#b45309">
+        <circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="2"/>
+        <path d="M10 6v5M10 13v1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <div class="small muted">Remote access requires a connected backend. Sign in to get started.</div>
+    </div>
+    {% else %}
+    <div class="vpn-card {{ 'vpn-card--ok' if hub.connected else 'vpn-card--off' }}" id="hub-card">
+      <div class="vpn-card__header">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/>
+          <path d="M12 2a14.5 14.5 0 0 0 0 20M12 2a14.5 14.5 0 0 1 0 20M2 12h20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span>Remote Access</span>
+        <span class="access-status {{ 'access-status--ok' if hub.connected else 'access-status--neutral' }}" id="hub-status-badge">
+          {% if hub.connected %}✓ Connected{% else %}○ Off{% endif %}
+        </span>
+      </div>
+      <div class="vpn-card__body">
+        <div class="vpn-controls">
+          {% if not hub.connected %}
+          <button class="btn btn--sm btn--green" id="hub-enable-btn" onclick="hubEnable()">Enable Remote Access</button>
+          {% else %}
+          <button class="btn btn--sm btn--red" id="hub-disable-btn" onclick="hubDisable()">Disable Remote Access</button>
+          {% endif %}
+        </div>
+        {% if hub.connected %}
+        <div class="access-row">
+          <span class="access-label">Your VPN IP</span>
+          <span class="access-value mono">{{ hub.vpn_ip }}</span>
+        </div>
+        {% if hub.lan_subnet %}
+        <div class="access-row">
+          <span class="access-label">LAN Subnet</span>
+          <span class="access-value mono">{{ hub.lan_subnet }}</span>
+        </div>
+        {% endif %}
+        <div class="access-row">
+          <span class="access-label">Peer Devices</span>
+          <span class="access-value" id="hub-peer-count">{{ hub.peer_count }}</span>
+        </div>
+        {% endif %}
+      </div>
+      {% if hub.connected %}
+      <div class="vpn-card__hint vpn-card__hint--ok">Remote access is active. Add devices below to connect from anywhere.</div>
+      {% else %}
+      <div class="vpn-card__hint vpn-card__hint--neutral">Enable remote access to let your devices securely reach your home network from anywhere — no port forwarding required.</div>
+      {% endif %}
+    </div>
+
+    {% if hub.connected %}
+    <div class="vpn-peers-section">
+      <div class="vpn-peers-header">
+        <span class="section-title" style="margin:0">Remote Devices</span>
+        <button class="btn btn--sm btn--blue" id="hub-add-peer-toggle" onclick="toggleHubAddPeer()">+ Add Device</button>
+      </div>
+
+      <div class="card vpn-add-form" id="hub-add-form" style="display:none">
+        <div class="form-group">
+          <label for="hub-peer-name">Device name</label>
+          <input type="text" id="hub-peer-name" placeholder="e.g. Phone, Laptop" maxlength="64" class="form-input">
+        </div>
+        <button class="btn btn--blue" id="hub-add-peer-btn" onclick="hubAddPeer()">Create Device</button>
+      </div>
+
+      <div id="hub-peer-result" style="display:none" class="card vpn-peer-result">
+        <div class="vpn-peer-result__header">
+          <strong>Device added</strong>
+          <button class="btn btn--sm" onclick="document.getElementById('hub-peer-result').style.display='none'">✕</button>
+        </div>
+        <div class="form-group">
+          <label>WireGuard Config</label>
+          <pre class="setup-code" id="hub-peer-config-text" style="max-height:200px;overflow:auto"></pre>
+        </div>
+        <div class="vpn-peer-actions">
+          <button class="btn btn--sm btn--blue" onclick="copyHubPeerConfig()">Copy Config</button>
+          <a class="btn btn--sm" id="hub-peer-dl-link" href="#" download>⬇ Download .conf</a>
+          <a class="btn btn--sm" id="hub-peer-qr-link" href="#" target="_blank">QR Code</a>
+        </div>
+        <div id="hub-peer-qr-img" style="text-align:center;margin-top:.5rem"></div>
+      </div>
+
+      <div id="hub-peers-list">
+        <div class="card muted small" id="hub-no-peers" style="text-align:center;padding:1.5rem;display:none">No devices yet. Click <strong>+ Add Device</strong> to create one.</div>
+        <table class="vpn-peers-table" id="hub-peers-table" style="{{ 'display:none' if not hub.connected else '' }}">
+          <thead>
+            <tr><th>Device</th><th>IP</th><th></th></tr>
+          </thead>
+          <tbody id="hub-peers-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+    {% endif %}
+
     <section class="section-title">Home Assistant Core</section>
     <div class="card stat-row">
       <span class="stat-label">HA Core (:8123)</span>
@@ -283,6 +523,16 @@
           </tr>
           {% endif %}
           <tr>
+            <td>WireGuard</td>
+            <td><span class="dot dot--{{ 'green' if vpn.enabled else 'gray' }}"></span>{{ 'Up' if vpn.enabled else 'Off' }}</td>
+            <td class="muted">Local VPN gateway ({{ vpn.peer_count }} peers)</td>
+          </tr>
+          <tr>
+            <td>Remote Access</td>
+            <td><span class="dot dot--{{ 'green' if hub.connected else 'gray' }}"></span>{{ 'Up' if hub.connected else 'Off' }}</td>
+            <td class="muted">Remote VPN ({{ hub.peer_count }} devices)</td>
+          </tr>
+          <tr>
             <td>TLS Certificate</td>
             <td colspan="2" class="mono small">{{ cert_status }}</td>
           </tr>
@@ -295,7 +545,7 @@
         <circle cx="10" cy="10" r="9" stroke="#6b7280" stroke-width="2"/>
         <path d="M10 6v5M10 13v1" stroke="#6b7280" stroke-width="2" stroke-linecap="round"/>
       </svg>
-      <p>This add-on does <strong>not</strong> expose your LAN, provide SSH access, or function as a VPN. Only Home Assistant is accessible.</p>
+      <p>This add-on proxies only Home Assistant. Remote Access VPN lets your devices securely reach your home LAN from anywhere. Local VPN provides split-tunnel LAN access on the same network.</p>
     </section>
 
     <footer>
@@ -310,7 +560,95 @@
     var LOGGED_IN = {{ 'true' if logged_in else 'false' }};
     var BACKEND_URL = "{{ backend_url }}";
     var INSTANCE_ID = "{{ instance_id }}";
+    var _basePath = (INGRESS_ENTRY || "").replace(/\/$/, "") + "/";
+    function _esc(s){var d=document.createElement("div");d.appendChild(document.createTextNode(s||""));return d.innerHTML;}
+    window.toggleHubAddPeer = function(){var f=document.getElementById("hub-add-form");if(f)f.style.display=f.style.display==="none"?"":"none";};
+    window.hubAddPeer = function(){
+      var name=(document.getElementById("hub-peer-name")||{}).value||"";
+      if(!name.trim()){alert("Device name is required");return;}
+      var btn=document.getElementById("hub-add-peer-btn");if(btn)btn.disabled=true;
+      fetch(_basePath+"api/hub/peers",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:name.trim()})})
+        .then(function(r){return r.json();}).then(function(d){
+          if(btn)btn.disabled=false;if(!d.ok){alert(d.error||"Failed to add device");return;}
+          document.getElementById("hub-add-form").style.display="none";
+          var result=document.getElementById("hub-peer-result");if(result)result.style.display="";
+          var cfg=document.getElementById("hub-peer-config-text");if(cfg)cfg.textContent=d.config||"";
+          var dl=document.getElementById("hub-peer-dl-link");if(dl&&d.peer){dl.href=_basePath+"api/hub/peers/"+d.peer.peer_id+"/config";dl.download="vipsy-remote-"+d.peer.peer_id+".conf";}
+          var qrl=document.getElementById("hub-peer-qr-link");if(qrl&&d.peer)qrl.href=_basePath+"api/hub/peers/"+d.peer.peer_id+"/qr";
+          var qri=document.getElementById("hub-peer-qr-img");if(qri&&d.peer)qri.innerHTML='<img src="'+_basePath+"api/hub/peers/"+d.peer.peer_id+'/qr" alt="QR" style="max-width:220px;margin-top:.5rem">';
+          if(window.refreshHubPeers)refreshHubPeers();
+        }).catch(function(){if(btn)btn.disabled=false;alert("Network error");});
+    };
+    window.hubEnable = function(){
+      var btn=document.getElementById("hub-enable-btn");if(btn){btn.disabled=true;btn.textContent="Connecting\u2026";}
+      fetch(_basePath+"api/hub/enable",{method:"POST"}).then(function(r){return r.json();}).then(function(d){
+        if(d.ok)location.reload();else{alert(d.error||"Failed to enable");if(btn){btn.disabled=false;btn.textContent="Enable Remote Access";}}
+      }).catch(function(){alert("Network error");if(btn){btn.disabled=false;btn.textContent="Enable Remote Access";}});
+    };
+    window.hubDisable = function(){
+      if(!confirm("Disable remote access?"))return;
+      fetch(_basePath+"api/hub/disable",{method:"POST"}).then(function(r){return r.json();}).then(function(d){
+        if(d.ok)location.reload();else alert(d.error||"Disconnect failed");
+      }).catch(function(){alert("Network error");});
+    };
+    window.hubRemovePeer = function(id){
+      if(!confirm("Remove this device?"))return;
+      fetch(_basePath+"api/hub/peers/"+id,{method:"DELETE"}).then(function(r){return r.json();}).then(function(d){
+        if(d.ok){var r=document.getElementById("hub-peer-row-"+id);if(r)r.remove();if(window.refreshHubPeers)refreshHubPeers();}
+        else alert(d.error||"Failed to remove");
+      }).catch(function(){alert("Network error");});
+    };
+    window.copyHubPeerConfig = function(){
+      var el=document.getElementById("hub-peer-config-text");
+      if(el)navigator.clipboard.writeText(el.textContent).then(function(){alert("Copied!");}).catch(function(){});
+    };
+    window.toggleAddPeer = function(){var f=document.getElementById("vpn-add-form");if(f)f.style.display=f.style.display==="none"?"":"none";};
+    window.vpnEnable = function(){
+      fetch(_basePath+"api/vpn/enable",{method:"POST"}).then(function(r){return r.json();}).then(function(d){
+        if(d.ok)location.reload();else alert(d.error||"Failed");
+      }).catch(function(){alert("Network error");});
+    };
+    window.vpnDisable = function(){
+      if(!confirm("Disable VPN?"))return;
+      fetch(_basePath+"api/vpn/disable",{method:"POST"}).then(function(r){return r.json();}).then(function(d){
+        if(d.ok)location.reload();else alert(d.error||"Failed");
+      }).catch(function(){alert("Network error");});
+    };
+    window.vpnKill = function(){
+      if(!confirm("KILL VPN?"))return;
+      fetch(_basePath+"api/vpn/kill",{method:"POST"}).then(function(r){return r.json();}).then(function(d){
+        if(d.ok)location.reload();else alert(d.error||"Failed");
+      }).catch(function(){alert("Network error");});
+    };
+    window.vpnAddPeer = function(){
+      var name=(document.getElementById("peer-name")||{}).value||"";
+      var ttlH=parseFloat((document.getElementById("peer-ttl")||{}).value||"0");
+      var persistent=(document.getElementById("peer-persistent")||{}).checked||false;
+      if(!name.trim()){alert("Peer name is required");return;}
+      var ttl=ttlH>0?Math.round(ttlH*3600):null;var body={name:name.trim(),persistent:persistent};if(ttl)body.ttl=ttl;
+      fetch(_basePath+"api/vpn/peers",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
+        .then(function(r){return r.json();}).then(function(d){
+          if(!d.ok){alert(d.error||"Failed");return;}
+          document.getElementById("vpn-add-form").style.display="none";
+          var result=document.getElementById("vpn-peer-result");if(result)result.style.display="";
+          var cfg=document.getElementById("vpn-peer-config-text");if(cfg)cfg.textContent=d.config||"";
+          var dl=document.getElementById("vpn-peer-dl-link");if(dl&&d.peer)dl.href=_basePath+"api/vpn/peers/"+d.peer.peer_id+"/config?network=lan";
+          var qrl=document.getElementById("vpn-peer-qr-link");if(qrl&&d.peer)qrl.href=_basePath+"api/vpn/peers/"+d.peer.peer_id+"/qr?network=lan";
+          if(window.refreshVpnPeers)refreshVpnPeers();
+        }).catch(function(){alert("Network error");});
+    };
+    window.vpnRemovePeer = function(id){
+      if(!confirm("Remove this peer?"))return;
+      fetch(_basePath+"api/vpn/peers/"+id,{method:"DELETE"}).then(function(r){return r.json();}).then(function(d){
+        if(d.ok){var r=document.getElementById("peer-row-"+id);if(r)r.remove();if(window.refreshVpnPeers)refreshVpnPeers();}
+        else alert(d.error||"Failed");
+      }).catch(function(){alert("Network error");});
+    };
+    window.copyPeerConfig = function(){
+      var el=document.getElementById("vpn-peer-config-text");
+      if(el)navigator.clipboard.writeText(el.textContent).then(function(){alert("Copied!");}).catch(function(){});
+    };
   </script>
-  <script src="{{ ingress_entry }}/static/app.js"></script>
+  <script src="{{ ingress_entry }}/static/app.js?v={{ version }}"></script>
 </body>
 </html>

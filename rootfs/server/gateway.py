@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import os
 import ssl
 import subprocess
@@ -10,10 +11,20 @@ import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
+import re
+
+logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s", force=True)
+logging.getLogger("vipsy").setLevel(logging.INFO)
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
+
 from flask import Flask, jsonify, render_template, request, redirect
 
 import threading
+
+_PEER_ID_RE = re.compile(r'^[0-9a-f]{8}$')
 import tunnel_manager
+import vpn_manager
+import hub_manager
 
 OPTIONS_PATH = os.environ.get("OPTIONS_PATH", "/data/options.json")
 INGRESS_PORT = int(os.environ.get("INGRESS_PORT", 8099))
@@ -251,6 +262,7 @@ def status():
         caddy=_service_running("caddy"),
         turn=_service_running("turnserver") if enable_turn else None,
         tunnel=tunnel_manager.is_running() if tunnel_manager.is_enabled() else None,
+        wireguard=vpn_manager._interface_exists(),
         tls=_cert_expiry(cert_path),
         mode="remote" if domain else "lan-only",
         domain=domain,
@@ -292,6 +304,43 @@ def diagnostics():
         warnings.append(msg)
     if tunnel_manager.is_enabled() and tunnel_manager.is_running() and not tunnel_manager.is_healthy():
         warnings.append("Cloudflare Tunnel is running but not yet healthy — check connectivity or wait a few seconds")
+
+    vpn_status = vpn_manager.status()
+    if vpn_status["enabled"] and vpn_status.get("overlap_warning"):
+        warnings.append(vpn_status["overlap_warning"])
+    if vpn_status["enabled"]:
+        ep = vpn_manager._endpoint_info()
+        if ep.get("port_forward_needed"):
+            pub = ep.get("remote") or "your public IP"
+            lan = ep.get("lan") or "your HA device"
+            port = ep.get("port", 51820)
+            warnings.append(
+                f"Remote VPN requires port forwarding: forward UDP {port} "
+                f"on your router from {pub} to {lan}"
+            )
+
+    try:
+        with open("/proc/sys/net/ipv4/ip_forward") as f:
+            if f.read().strip() != "1":
+                warnings.append(
+                    "IP forwarding is disabled — VPN clients can reach this device "
+                    "but NOT other LAN hosts. The add-on will try to enable it when "
+                    "a VPN is activated."
+                )
+    except Exception:
+        pass
+
+    hub_status = hub_manager.status()
+    if hub_status.get("connected") or vpn_status["enabled"]:
+        try:
+            with open("/proc/sys/net/ipv4/ip_forward") as f:
+                if f.read().strip() != "1":
+                    warnings.append(
+                        "CRITICAL: A VPN is active but IP forwarding is still disabled. "
+                        "Only this device is reachable — other LAN devices are NOT accessible."
+                    )
+        except Exception:
+            pass
 
     return jsonify(warnings=warnings, count=len(warnings))
 
@@ -405,6 +454,202 @@ def logout():
     return redirect(f"{INGRESS_ENTRY}/")
 
 
+@app.route("/api/vpn")
+def vpn_status():
+    return jsonify(vpn_manager.status())
+
+
+@app.route("/api/vpn/enable", methods=["POST"])
+def vpn_enable():
+    result = vpn_manager.enable()
+    code = 200 if result.get("ok") else 500
+    return jsonify(result), code
+
+
+@app.route("/api/vpn/disable", methods=["POST"])
+def vpn_disable():
+    result = vpn_manager.disable()
+    return jsonify(result)
+
+
+@app.route("/api/vpn/kill", methods=["POST"])
+def vpn_kill():
+    result = vpn_manager.kill()
+    return jsonify(result)
+
+
+@app.route("/api/vpn/peers", methods=["GET"])
+def vpn_peers_list():
+    return jsonify(peers=vpn_manager.list_peers())
+
+
+@app.route("/api/vpn/peers", methods=["POST"])
+def vpn_peers_create():
+    data = request.get_json(silent=True) or {}
+    name = data.get("name", "").strip()
+    ttl = data.get("ttl")
+    persistent = data.get("persistent", False)
+    dns = data.get("dns")
+    if ttl is not None:
+        try:
+            ttl = int(ttl)
+        except (ValueError, TypeError):
+            return jsonify(ok=False, error="Invalid TTL value"), 400
+    result = vpn_manager.add_peer(name, ttl=ttl, persistent=persistent, dns=dns)
+    code = 201 if result.get("ok") else (429 if "Rate limit" in result.get("error", "") else 400)
+    return jsonify(result), code
+
+
+@app.route("/api/vpn/peers/<peer_id>", methods=["DELETE"])
+def vpn_peers_delete(peer_id):
+    if not _PEER_ID_RE.match(peer_id):
+        return jsonify(ok=False, error="Invalid peer ID"), 400
+    result = vpn_manager.remove_peer(peer_id)
+    code = 200 if result.get("ok") else 404
+    return jsonify(result), code
+
+
+@app.route("/api/vpn/peers/<peer_id>/config")
+def vpn_peer_config(peer_id):
+    if not _PEER_ID_RE.match(peer_id):
+        return jsonify(ok=False, error="Invalid peer ID"), 400
+    network = request.args.get("network", "lan")
+    if network not in ("remote", "lan", "tunnel"):
+        network = "lan"
+    config = vpn_manager.get_peer_config(peer_id, network)
+    if not config:
+        return jsonify(ok=False, error="Peer not found"), 404
+    from flask import Response
+    return Response(config, mimetype="text/plain",
+                    headers={"Content-Disposition": f"attachment; filename=vipsy-{peer_id}-{network}.conf"})
+
+
+@app.route("/api/vpn/peers/<peer_id>/qr")
+def vpn_peer_qr(peer_id):
+    if not _PEER_ID_RE.match(peer_id):
+        return jsonify(ok=False, error="Invalid peer ID"), 400
+    network = request.args.get("network", "lan")
+    if network not in ("remote", "lan", "tunnel"):
+        network = "lan"
+    qr_data = vpn_manager.get_peer_qr(peer_id, network)
+    if not qr_data:
+        return jsonify(ok=False, error="Peer not found or QR generation failed"), 404
+    from flask import Response
+    return Response(qr_data, mimetype="image/png")
+
+
+
+
+
+@app.route("/api/debug/network")
+def debug_network():
+    info = {}
+    try:
+        with open("/proc/sys/net/ipv4/ip_forward") as f:
+            info["ip_forward"] = f.read().strip()
+    except Exception as e:
+        info["ip_forward"] = f"error: {e}"
+    try:
+        with open("/proc/sys/net/ipv4/conf/all/rp_filter") as f:
+            info["rp_filter_all"] = f.read().strip()
+    except Exception as e:
+        info["rp_filter_all"] = f"error: {e}"
+    for iface in ["wg-hub", "wg0"]:
+        for key in ["rp_filter", "forwarding"]:
+            try:
+                with open(f"/proc/sys/net/ipv4/conf/{iface}/{key}") as f:
+                    info[f"{iface}_{key}"] = f.read().strip()
+            except Exception:
+                info[f"{iface}_{key}"] = "n/a"
+    def _cmd(args):
+        try:
+            r = subprocess.run(args, capture_output=True, text=True, timeout=10)
+            return r.stdout.strip()
+        except Exception as e:
+            return f"error: {e}"
+    info["iptables_version"] = _cmd(["iptables", "--version"])
+    info["iptables_forward"] = _cmd(["iptables", "-L", "FORWARD", "-n", "-v", "--line-numbers"])
+    info["iptables_hub_fwd"] = _cmd(["iptables", "-L", "VIPSY-HUB-FWD", "-n", "-v"])
+    info["iptables_vpn_fwd"] = _cmd(["iptables", "-L", "VIPSY-VPN-FWD", "-n", "-v"])
+    info["iptables_docker_user"] = _cmd(["iptables", "-L", "DOCKER-USER", "-n", "-v"])
+    info["iptables_nat"] = _cmd(["iptables", "-t", "nat", "-L", "POSTROUTING", "-n", "-v", "--line-numbers"])
+    info["iptables_hub_nat"] = _cmd(["iptables", "-t", "nat", "-L", "VIPSY-HUB-NAT", "-n", "-v"])
+    info["iptables_vpn_nat"] = _cmd(["iptables", "-t", "nat", "-L", "VIPSY-VPN-NAT", "-n", "-v"])
+    info["ip_route"] = _cmd(["ip", "route"])
+    info["ip_addr"] = _cmd(["ip", "-br", "addr"])
+    info["wg_show"] = _cmd(["wg", "show"])
+    info["nft_list"] = _cmd(["nft", "list", "ruleset"])
+    info["host_cidr"] = os.environ.get("HOST_CIDR", "")
+    info["host_ip"] = os.environ.get("HOST_IP", "")
+    try:
+        info["proc_sys_writable"] = os.access("/proc/sys/net/ipv4/ip_forward", os.W_OK)
+    except Exception:
+        info["proc_sys_writable"] = "unknown"
+    return jsonify(info)
+
+
+@app.route("/api/hub/status")
+def hub_status():
+    return jsonify(ok=True, data=hub_manager.status())
+
+
+@app.route("/api/hub/enable", methods=["POST"])
+def hub_enable():
+    result = hub_manager.enable()
+    code = 200 if result.get("ok") else 500
+    return jsonify(result), code
+
+
+@app.route("/api/hub/disable", methods=["POST"])
+def hub_disable():
+    result = hub_manager.disable()
+    return jsonify(result)
+
+
+@app.route("/api/hub/peers", methods=["GET"])
+def hub_list_peers():
+    result = hub_manager.list_peers()
+    code = 200 if result.get("ok") else 500
+    return jsonify(result), code
+
+
+@app.route("/api/hub/peers", methods=["POST"])
+def hub_add_peer():
+    body = request.get_json(silent=True) or {}
+    name = body.get("name", "").strip()
+    if not name:
+        return jsonify(ok=False, error="name required"), 400
+    result = hub_manager.add_peer(name)
+    code = 201 if result.get("ok") else 500
+    return jsonify(result), code
+
+
+@app.route("/api/hub/peers/<peer_id>", methods=["DELETE"])
+def hub_remove_peer(peer_id):
+    result = hub_manager.remove_peer(peer_id)
+    code = 200 if result.get("ok") else 500
+    return jsonify(result), code
+
+
+@app.route("/api/hub/peers/<peer_id>/config")
+def hub_peer_config(peer_id):
+    cfg_text = hub_manager.get_peer_config(peer_id)
+    if not cfg_text:
+        return jsonify(ok=False, error="Config not available — re-add peer to regenerate"), 404
+    from flask import Response
+    return Response(cfg_text, mimetype="text/plain",
+                    headers={"Content-Disposition": f"attachment; filename=vipsy-{peer_id}.conf"})
+
+
+@app.route("/api/hub/peers/<peer_id>/qr")
+def hub_peer_qr(peer_id):
+    qr_data = hub_manager.get_peer_qr(peer_id)
+    if not qr_data:
+        return jsonify(ok=False, error="Peer not found or QR generation failed"), 404
+    from flask import Response
+    return Response(qr_data, mimetype="image/png")
+
+
 def _index_context(**extra):
     domain = options.get("domain", "")
     enable_turn = options.get("enable_turn", True)
@@ -430,6 +675,9 @@ def _index_context(**extra):
         cert_status=cert_status,
         access=access,
         tunnel=tunnel,
+        vpn=vpn_manager.status(),
+        vpn_peers=vpn_manager.list_peers(),
+        hub=hub_manager.status(),
         now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         ingress_entry=INGRESS_ENTRY,
         version=options.get("_version", "1.3.8"),

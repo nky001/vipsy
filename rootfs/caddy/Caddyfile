@@ -17,6 +17,13 @@
 		-Alt-Svc
 	}
 
+	@wgtunnel {
+		path /wg-tunnel
+	}
+	reverse_proxy @wgtunnel 127.0.0.1:51821 {
+		flush_interval -1
+	}
+
 	@websocket {
 		header Connection *Upgrade*
 		header Upgrade websocket

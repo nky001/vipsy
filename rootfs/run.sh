@@ -7,10 +7,8 @@ CERTFILE=$(jq -r '.certfile // "fullchain.pem"' "$OPTIONS_FILE")
 KEYFILE=$(jq -r '.keyfile // "privkey.pem"' "$OPTIONS_FILE")
 ENABLE_TURN=$(jq -r '.enable_turn // true' "$OPTIONS_FILE")
 TUNNEL_ENABLED=$(jq -r '.tunnel_enabled // false' "$OPTIONS_FILE")
-OPTIONS_SERVICE_KEY=$(jq -r '.service_key // ""' "$OPTIONS_FILE")
-if [ -n "$OPTIONS_SERVICE_KEY" ]; then
-    export VIPSY_SERVICE_KEY="$OPTIONS_SERVICE_KEY"
-fi
+VPN_SUBNET=$(jq -r '.vpn_subnet // "10.8.0.0/24"' "$OPTIONS_FILE")
+VPN_PORT=$(jq -r '.vpn_port // 51820' "$OPTIONS_FILE")
 
 SSL_CERT="/ssl/${CERTFILE}"
 SSL_KEY="/ssl/${KEYFILE}"
@@ -36,10 +34,11 @@ if [ -n "${SUPERVISOR_TOKEN:-}" ]; then
     if [ -n "$NETWORK_RAW" ]; then
         ALL_IPS=$(echo "$NETWORK_RAW" | jq -r '.data.interfaces[]?.ipv4?.address[]?' 2>/dev/null || echo "")
         echo "[vipsy] all interface IPs: $ALL_IPS"
-        HOST_IP=$(echo "$ALL_IPS" | grep -v "^172\." | grep -v "^$" | head -1 | cut -d/ -f1)
-        if [ -z "$HOST_IP" ]; then
-            HOST_IP=$(echo "$ALL_IPS" | grep -v "^$" | head -1 | cut -d/ -f1)
+        HOST_CIDR=$(echo "$ALL_IPS" | grep -v "^172\." | grep -v "^$" | head -1)
+        if [ -z "$HOST_CIDR" ]; then
+            HOST_CIDR=$(echo "$ALL_IPS" | grep -v "^$" | head -1)
         fi
+        HOST_IP=$(echo "$HOST_CIDR" | cut -d/ -f1)
     fi
     echo "[vipsy] ingress entry: ${INGRESS_ENTRY:-not set}"
     echo "[vipsy] HTTPS host port: ${HTTPS_HOST_PORT}"
@@ -48,7 +47,10 @@ fi
 export INGRESS_ENTRY
 export HTTPS_HOST_PORT
 export HOST_IP
+export HOST_CIDR
 export TUNNEL_ENABLED
+export VPN_SUBNET
+export VPN_PORT
 
 build_san() {
     local san="DNS:${DOMAIN:-localhost},IP:127.0.0.1"
@@ -113,9 +115,45 @@ fi
 export HA_CORE_URL="http://homeassistant:8123"
 export HA_PROXY_HOST="homeassistant"
 export CADDY_HTTPS_PORT=443
+export PUBLIC_IP="$PUBLIC_IP"
+export DOMAIN="$DOMAIN"
+export HOST_IP="$HOST_IP"
 
-echo "[vipsy] applying firewall rules"
-nft -f /etc/nftables.conf 2>/dev/null || echo "[vipsy] nftables skipped"
+echo "[vipsy] enabling IP forwarding for VPN NAT"
+sysctl -w net.ipv4.ip_forward=1 2>/dev/null || true
+{ echo 1 > /proc/sys/net/ipv4/ip_forward; } 2>/dev/null || true
+{ echo 1 > /proc/sys/net/ipv4/conf/all/forwarding; } 2>/dev/null || true
+{ echo 0 > /proc/sys/net/ipv4/conf/all/rp_filter; } 2>/dev/null || true
+{ echo 0 > /proc/sys/net/ipv4/conf/default/rp_filter; } 2>/dev/null || true
+sysctl -w net.ipv4.ip_forward=1 2>/dev/null || true
+IP_FWD="$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)"
+echo "[vipsy] ip_forward = ${IP_FWD:-unknown}"
+if [ "$IP_FWD" = "1" ]; then
+    echo "[vipsy] IP forwarding is ON"
+else
+    echo "[vipsy] WARNING: ip_forward is still $IP_FWD — LAN routing WILL NOT WORK"
+    echo "[vipsy] /proc/sys writable: $(test -w /proc/sys/net/ipv4/ip_forward && echo yes || echo no)"
+fi
+
+echo "[vipsy] firewall diagnostics"
+echo "[vipsy] nft version: $(nft --version 2>&1)"
+nft list tables 2>&1 && echo "[vipsy] nft: OK" || echo "[vipsy] nft: FAILED"
+nft list chain ip filter FORWARD 2>&1 | head -8 || true
+nft list chain ip filter DOCKER-USER 2>&1 | head -8 || true
+nft list chain ip nat POSTROUTING 2>&1 | head -8 || true
+
+echo "[vipsy] cleaning stale vipsy nft tables"
+for t in "inet vipsy" "inet vipsy_hub_nat" "inet vipsy_vpn_nat" "ip vipsy_hub_nat" "ip vipsy_vpn_nat"; do
+    nft list table $t >/dev/null 2>&1 && { nft delete table $t 2>&1; echo "[vipsy] cleaned stale $t"; } || true
+done
+
+echo "[vipsy] preparing VPN data directory"
+mkdir -p /data/wireguard
+echo "[vipsy] VPN startup cleanup"
+python3 -c "import sys; sys.path.insert(0, '/server'); import vpn_manager; vpn_manager.startup_cleanup()" 2>/dev/null || echo "[vipsy] VPN cleanup skipped"
+
+echo "[vipsy] hub startup reconnect"
+python3 -c "import sys; sys.path.insert(0, '/server'); import hub_manager; hub_manager.startup_reconnect()" || echo "[vipsy] hub reconnect skipped"
 
 if [ "$ENABLE_TURN" = "true" ]; then
     TURN_SECRET_FILE="/data/turn_secret"

@@ -17,9 +17,9 @@
 
   function toggleStaticUrl() {
     var el = document.getElementById("tunnel-static-info");
-    if (el) el.style.display = (_loggedIn && _tunnelMode === "static") ? "" : "none";
+    if (el) el.style.display = (_tunnelMode === "static") ? "" : "none";
     var qRow = document.getElementById("tunnel-quick-url-row");
-    if (qRow) qRow.style.display = (_tunnelMode === "quick") ? "" : "none";
+    if (qRow && _tunnelMode) qRow.style.display = (_tunnelMode === "quick") ? "" : "none";
   }
 
   function showAuthError(msg) {
@@ -258,4 +258,340 @@
   }, POLL_MS);
 
   setInterval(refreshAuth, 60000);
+
+  function refreshVpn() {
+    fetch(basePath + "api/vpn")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var st = document.getElementById("vpn-status");
+        if (st) {
+          st.textContent = d.enabled ? "\u2713 Active" : "\u25CB Inactive";
+          st.className = "access-status " + (d.enabled ? "access-status--ok" : "access-status--neutral");
+        }
+        var pc = document.getElementById("vpn-peer-count");
+        if (pc) pc.textContent = d.peer_count + " total, " + d.connected_count + " connected";
+        var card = document.getElementById("vpn-card");
+        if (card) card.className = "vpn-card " + (d.enabled ? "vpn-card--ok" : "vpn-card--off");
+      })
+      .catch(function () {});
+  }
+
+  function refreshVpnPeers() {
+    var tbody = document.getElementById("vpn-peers-tbody");
+    if (!tbody) return;
+    fetch(basePath + "api/vpn/peers")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var peers = d.peers || [];
+        var noPeers = document.getElementById("vpn-no-peers");
+        if (peers.length === 0) {
+          tbody.innerHTML = "";
+          if (noPeers) noPeers.style.display = "";
+          return;
+        }
+        if (noPeers) noPeers.style.display = "none";
+        var html = "";
+        for (var i = 0; i < peers.length; i++) {
+          var p = peers[i];
+          var exp = p.expires_at ? p.expires_at.substring(0, 16) : "Never";
+          var conn = p.connected;
+          html += '<tr id="peer-row-' + p.peer_id + '">' +
+            "<td>" + _esc(p.name) + "</td>" +
+            '<td class="mono">' + p.vpn_ip + "</td>" +
+            "<td><span class=\"dot dot--" + (conn ? "green" : "gray") + "\"></span>" + (conn ? "Connected" : "Idle") + "</td>" +
+            '<td class="mono small">' + exp + "</td>" +
+            "<td>" +
+            '<a href="' + basePath + "api/vpn/peers/" + p.peer_id + '/config?network=lan" class="btn btn--sm" title="LAN config">\u2B07 LAN</a>' +
+            '<a href="' + basePath + "api/vpn/peers/" + p.peer_id + '/config?network=remote" class="btn btn--sm" title="Remote config">\u2B07 WAN</a>' +
+            '<a href="' + basePath + "api/vpn/peers/" + p.peer_id + '/qr?network=lan" class="btn btn--sm" target="_blank" title="LAN QR">\u25FB</a>' +
+            '<button class="btn btn--sm btn--red" onclick="vpnRemovePeer(\'' + p.peer_id + '\')" title="Remove peer">\u2715</button>' +
+            "</td></tr>";
+        }
+        tbody.innerHTML = html;
+      })
+      .catch(function () {});
+  }
+
+  function _esc(s) {
+    var d = document.createElement("div");
+    d.appendChild(document.createTextNode(s || ""));
+    return d.innerHTML;
+  }
+
+  window.vpnEnable = function () {
+    fetch(basePath + "api/vpn/enable", { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) location.reload();
+        else alert(d.error || "Failed to enable VPN");
+      })
+      .catch(function () { alert("Network error"); });
+  };
+
+  window.vpnDisable = function () {
+    if (!confirm("Disable VPN? Active peers will be disconnected.")) return;
+    fetch(basePath + "api/vpn/disable", { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) location.reload();
+        else alert(d.error || "Failed to disable VPN");
+      })
+      .catch(function () { alert("Network error"); });
+  };
+
+  window.vpnKill = function () {
+    if (!confirm("KILL VPN? This removes ALL peers and shuts down the interface immediately.")) return;
+    fetch(basePath + "api/vpn/kill", { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) location.reload();
+        else alert(d.error || "Kill switch failed");
+      })
+      .catch(function () { alert("Network error"); });
+  };
+
+  window.toggleAddPeer = function () {
+    var form = document.getElementById("vpn-add-form");
+    if (form) form.style.display = form.style.display === "none" ? "" : "none";
+  };
+
+  window.vpnAddPeer = function () {
+    var name = (document.getElementById("peer-name") || {}).value || "";
+    var ttlHours = parseFloat((document.getElementById("peer-ttl") || {}).value || "0");
+    var persistent = (document.getElementById("peer-persistent") || {}).checked || false;
+    if (!name.trim()) { alert("Peer name is required"); return; }
+    var ttl = ttlHours > 0 ? Math.round(ttlHours * 3600) : null;
+    var body = { name: name.trim(), persistent: persistent };
+    if (ttl) body.ttl = ttl;
+    fetch(basePath + "api/vpn/peers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { alert(d.error || "Failed to create peer"); return; }
+        document.getElementById("vpn-add-form").style.display = "none";
+        var result = document.getElementById("vpn-peer-result");
+        if (result) result.style.display = "";
+        var configEl = document.getElementById("vpn-peer-config-text");
+        if (configEl) configEl.textContent = d.config || "";
+        var dlLink = document.getElementById("vpn-peer-dl-link");
+        if (dlLink && d.peer) dlLink.href = basePath + "api/vpn/peers/" + d.peer.peer_id + "/config?network=lan";
+        var qrLink = document.getElementById("vpn-peer-qr-link");
+        if (qrLink && d.peer) qrLink.href = basePath + "api/vpn/peers/" + d.peer.peer_id + "/qr?network=lan";
+        var remoteDl = document.getElementById("vpn-peer-dl-remote");
+        var remoteQr = document.getElementById("vpn-peer-qr-remote");
+        var remoteBlock = document.getElementById("vpn-remote-block");
+        var remoteConfigEl = document.getElementById("vpn-peer-remote-config-text");
+        if (d.remote_config && d.peer) {
+          if (remoteBlock) remoteBlock.style.display = "";
+          if (remoteConfigEl) remoteConfigEl.textContent = d.remote_config;
+          if (remoteDl) remoteDl.href = basePath + "api/vpn/peers/" + d.peer.peer_id + "/config?network=remote";
+          if (remoteQr) remoteQr.href = basePath + "api/vpn/peers/" + d.peer.peer_id + "/qr?network=remote";
+        } else {
+          if (remoteBlock) remoteBlock.style.display = "none";
+        }
+        if (d.qr_available && d.peer) {
+          var qrImg = document.getElementById("vpn-peer-qr-img");
+          if (qrImg) qrImg.innerHTML = '<img src="' + basePath + "api/vpn/peers/" + d.peer.peer_id + '/qr?network=lan" alt="QR" style="max-width:200px">';
+        }
+        refreshVpnPeers();
+      })
+      .catch(function () { alert("Network error"); });
+  };
+
+  window.vpnRemovePeer = function (peerId) {
+    if (!confirm("Remove this peer?")) return;
+    fetch(basePath + "api/vpn/peers/" + peerId, { method: "DELETE" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) {
+          var row = document.getElementById("peer-row-" + peerId);
+          if (row) row.remove();
+          refreshVpnPeers();
+        } else {
+          alert(d.error || "Failed to remove peer");
+        }
+      })
+      .catch(function () { alert("Network error"); });
+  };
+
+  window.copyPeerConfig = function () {
+    var el = document.getElementById("vpn-peer-config-text");
+    if (el) {
+      navigator.clipboard.writeText(el.textContent).then(function () {
+        alert("Config copied to clipboard");
+      }).catch(function () {
+        var range = document.createRange();
+        range.selectNodeContents(el);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      });
+    }
+  };
+
+  setInterval(function () {
+    refreshVpn();
+    refreshVpnPeers();
+    refreshHub();
+  }, POLL_MS);
+
+  function refreshHub() {
+    fetch(basePath + "api/hub/status")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok && !d.data) return;
+        var s = d.data || d;
+        var badge = document.getElementById("hub-status-badge");
+        if (badge) {
+          if (s.connected) {
+            badge.textContent = "\u2713 Connected";
+            badge.className = "access-status access-status--ok";
+          } else {
+            badge.textContent = "\u25CB Off";
+            badge.className = "access-status access-status--neutral";
+          }
+        }
+        var card = document.getElementById("hub-card");
+        if (card) card.className = "vpn-card " + (s.connected ? "vpn-card--ok" : "vpn-card--off");
+        var pc = document.getElementById("hub-peer-count");
+        if (pc) pc.textContent = (s.peer_count || 0).toString();
+      })
+      .catch(function () {});
+  }
+
+  function refreshHubPeers() {
+    var tbody = document.getElementById("hub-peers-tbody");
+    if (!tbody) return;
+    fetch(basePath + "api/hub/peers")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var peers = (d.peers || []).filter(function (p) { return p.role === "client" && p.active !== false; });
+        var table = document.getElementById("hub-peers-table");
+        var noPeers = document.getElementById("hub-no-peers");
+        if (peers.length === 0) {
+          tbody.innerHTML = "";
+          if (table) table.style.display = "none";
+          if (noPeers) noPeers.style.display = "";
+          return;
+        }
+        if (table) table.style.display = "";
+        if (noPeers) noPeers.style.display = "none";
+        var html = "";
+        for (var i = 0; i < peers.length; i++) {
+          var p = peers[i];
+          html += '<tr id="hub-peer-row-' + p.peer_id + '">' +
+            "<td>" + _esc(p.name || p.peer_id) + "</td>" +
+            '<td class="mono">' + (p.vpn_ip || "") + "</td>" +
+            "<td>" +
+            (p.config ? '<a href="' + basePath + "api/hub/peers/" + p.peer_id + '/config" class="btn btn--sm" download>\u2B07 .conf</a>' : "") +
+            (p.config ? '<a href="' + basePath + "api/hub/peers/" + p.peer_id + '/qr" class="btn btn--sm" target="_blank" title="QR Code">\u25FB</a>' : "") +
+            '<button class="btn btn--sm btn--red" onclick="hubRemovePeer(\'' + p.peer_id + '\')" title="Remove">\u2715</button>' +
+            "</td></tr>";
+        }
+        tbody.innerHTML = html;
+      })
+      .catch(function () {});
+  }
+
+  window.hubEnable = function () {
+    var btn = document.getElementById("hub-enable-btn");
+    if (btn) { btn.disabled = true; btn.textContent = "Connecting\u2026"; }
+    fetch(basePath + "api/hub/enable", { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) location.reload();
+        else { alert(d.error || "Failed to enable remote access"); if (btn) { btn.disabled = false; btn.textContent = "Enable Remote Access"; } }
+      })
+      .catch(function () { alert("Network error"); if (btn) { btn.disabled = false; btn.textContent = "Enable Remote Access"; } });
+  };
+
+  window.hubDisable = function () {
+    if (!confirm("Disable remote access? Connected devices will be disconnected.")) return;
+    fetch(basePath + "api/hub/disable", { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) location.reload();
+        else alert(d.error || "Disconnect failed");
+      })
+      .catch(function () { alert("Network error"); });
+  };
+
+  window.toggleHubAddPeer = function () {
+    var form = document.getElementById("hub-add-form");
+    if (form) form.style.display = form.style.display === "none" ? "" : "none";
+  };
+
+  window.hubAddPeer = function () {
+    var name = (document.getElementById("hub-peer-name") || {}).value || "";
+    if (!name.trim()) { alert("Device name is required"); return; }
+    var btn = document.getElementById("hub-add-peer-btn");
+    if (btn) btn.disabled = true;
+    fetch(basePath + "api/hub/peers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name.trim() }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (btn) btn.disabled = false;
+        if (!d.ok) { alert(d.error || "Failed to add device"); return; }
+        document.getElementById("hub-add-form").style.display = "none";
+        var result = document.getElementById("hub-peer-result");
+        if (result) result.style.display = "";
+        var configEl = document.getElementById("hub-peer-config-text");
+        if (configEl) configEl.textContent = d.config || "";
+        var dlLink = document.getElementById("hub-peer-dl-link");
+        if (dlLink && d.peer) {
+          dlLink.href = basePath + "api/hub/peers/" + d.peer.peer_id + "/config";
+          dlLink.download = "vipsy-remote-" + d.peer.peer_id + ".conf";
+        }
+        var qrLink = document.getElementById("hub-peer-qr-link");
+        if (qrLink && d.peer) {
+          qrLink.href = basePath + "api/hub/peers/" + d.peer.peer_id + "/qr";
+        }
+        var qrImg = document.getElementById("hub-peer-qr-img");
+        if (qrImg && d.peer) {
+          qrImg.innerHTML = '<img src="' + basePath + "api/hub/peers/" + d.peer.peer_id + '/qr" alt="QR" style="max-width:220px;margin-top:.5rem">';
+        }
+        refreshHubPeers();
+      })
+      .catch(function () { if (btn) btn.disabled = false; alert("Network error"); });
+  };
+
+  window.hubRemovePeer = function (peerId) {
+    if (!confirm("Remove this hub peer?")) return;
+    fetch(basePath + "api/hub/peers/" + peerId, { method: "DELETE" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) {
+          var row = document.getElementById("hub-peer-row-" + peerId);
+          if (row) row.remove();
+          refreshHubPeers();
+        } else {
+          alert(d.error || "Failed to remove hub peer");
+        }
+      })
+      .catch(function () { alert("Network error"); });
+  };
+
+  window.copyHubPeerConfig = function () {
+    var el = document.getElementById("hub-peer-config-text");
+    if (el) {
+      navigator.clipboard.writeText(el.textContent).then(function () {
+        alert("Config copied to clipboard");
+      }).catch(function () {
+        var range = document.createRange();
+        range.selectNodeContents(el);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      });
+    }
+  };
+
+  refreshHub();
+  refreshHubPeers();
 })();
