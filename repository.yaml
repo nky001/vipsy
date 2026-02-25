@@ -1,0 +1,19 @@
+name: Vipsy Add-on Repository
+url: https://github.com/nky001/vipsy
+maintainer: Nitish
+
+addons:
+  - slug: vipsy
+    name: Vipsy
+    description: Secure gateway add-on for Home Assistant OS.
+    version: "2.6.0"
+    url: https://github.com/nky001/vipsy
+    startup: services
+    boot: auto
+    map:
+      - config
+      - ssl
+    ports:
+      8099: 8099/tcp
+    ingress: true
+    panel_icon: mdi:shield-lock
