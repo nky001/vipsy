@@ -10,6 +10,6 @@
     "io.hass.name": "Vipsy",
     "io.hass.description": "Secure remote access to Home Assistant — application-layer gateway",
     "io.hass.type": "addon",
-    "io.hass.version": "2.6.1"
+    "io.hass.version": "2.6.2"
   }
 }
