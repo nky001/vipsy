@@ -207,17 +207,18 @@ def _remove_nft_rules_by_comment(comment):
                     capture_output=True, text=True, timeout=10,
                 )
                 if r.returncode != 0:
+                    print(f"[vipsy.hub] nft list chain {_NFT_FAMILY} {tbl} {chain_name} failed: {r.stderr.strip()[:200]}", flush=True)
                     continue
                 for line in r.stdout.splitlines():
                     if f'comment "{comment}"' in line:
                         m = re.search(r'# handle (\d+)', line)
                         if m:
                             _nft_cmd("delete", "rule", _NFT_FAMILY, tbl, chain_name, "handle", m.group(1))
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[vipsy.hub] nft rule cleanup error ({tbl}/{chain_name}): {e}", flush=True)
 
 
-def _inject_docker_rules(iface, comment, hub_subnet):
+def _inject_docker_rules(iface, comment, hub_subnet, lan_subnet):
     _remove_nft_rules_by_comment(comment)
     print(f"[vipsy.hub] injecting rules into {_NFT_FAMILY} filter + nat for {iface}", flush=True)
     results = []
@@ -230,7 +231,7 @@ def _inject_docker_rules(iface, comment, hub_subnet):
         results.extend([ok1, ok2])
         print(f"[vipsy.hub] {chain}: iif_accept={ok1} oif_related={ok2}", flush=True)
     ok_nat = _nft_cmd("add", "rule", _NFT_FAMILY, "nat", "POSTROUTING",
-                      "ip", "saddr", hub_subnet, "oifname", "!=", iface,
+                      "ip", "saddr", hub_subnet, "ip", "daddr", lan_subnet, "oifname", "!=", iface,
                       "masquerade", "comment", f'"{comment}"')
     results.append(ok_nat)
     print(f"[vipsy.hub] POSTROUTING masquerade: {ok_nat}", flush=True)
@@ -286,7 +287,7 @@ def _apply_hub_nat(hub_subnet):
         lan = "192.168.1.0/24"
     print(f"[vipsy.hub] apply hub NAT: hub={hub_subnet} lan={lan} iface={HUB_INTERFACE}", flush=True)
 
-    ok = _inject_docker_rules(HUB_INTERFACE, _HUB_NFT_COMMENT, hub_subnet)
+    ok = _inject_docker_rules(HUB_INTERFACE, _HUB_NFT_COMMENT, hub_subnet, lan)
     print(f"[vipsy.hub] rules injected: {ok}", flush=True)
 
     for lbl, cmd in [

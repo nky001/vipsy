@@ -264,17 +264,18 @@ def _remove_nft_rules_by_comment(comment):
                     capture_output=True, text=True, timeout=10,
                 )
                 if r.returncode != 0:
+                    print(f"[vipsy.vpn] nft list chain {_NFT_FAMILY} {tbl} {chain_name} failed: {r.stderr.strip()[:200]}", flush=True)
                     continue
                 for line in r.stdout.splitlines():
                     if f'comment "{comment}"' in line:
                         m = re.search(r'# handle (\d+)', line)
                         if m:
                             _nft_cmd("delete", "rule", _NFT_FAMILY, tbl, chain_name, "handle", m.group(1))
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[vipsy.vpn] nft rule cleanup error ({tbl}/{chain_name}): {e}", flush=True)
 
 
-def _inject_docker_rules(iface, comment, vpn_subnet):
+def _inject_docker_rules(iface, comment, vpn_subnet, lan_subnet):
     _remove_nft_rules_by_comment(comment)
     print(f"[vipsy.vpn] injecting rules into {_NFT_FAMILY} filter + nat for {iface}", flush=True)
     results = []
@@ -287,7 +288,7 @@ def _inject_docker_rules(iface, comment, vpn_subnet):
         results.extend([ok1, ok2])
         print(f"[vipsy.vpn] {chain}: iif_accept={ok1} oif_related={ok2}", flush=True)
     ok_nat = _nft_cmd("add", "rule", _NFT_FAMILY, "nat", "POSTROUTING",
-                      "ip", "saddr", vpn_subnet, "oifname", "!=", iface,
+                      "ip", "saddr", vpn_subnet, "ip", "daddr", lan_subnet, "oifname", "!=", iface,
                       "masquerade", "comment", f'"{comment}"')
     results.append(ok_nat)
     print(f"[vipsy.vpn] POSTROUTING masquerade: {ok_nat}", flush=True)
@@ -345,7 +346,7 @@ def _apply_nat_rules():
     subnet = _subnet()
     _log.info("apply VPN NAT: subnet=%s lan=%s iface=%s", subnet, lan, VPN_INTERFACE)
 
-    ok = _inject_docker_rules(VPN_INTERFACE, _VPN_NFT_COMMENT, subnet)
+    ok = _inject_docker_rules(VPN_INTERFACE, _VPN_NFT_COMMENT, subnet, lan)
     _log.info("rules injected: %s", ok)
 
     for lbl, cmd in [
