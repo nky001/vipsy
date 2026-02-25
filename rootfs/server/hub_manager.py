@@ -2,7 +2,9 @@ import ipaddress
 import json
 import logging
 import os
+import random
 import re
+import string
 import subprocess
 import sys
 import threading
@@ -25,6 +27,7 @@ HUB_PUB_FILE = os.path.join(VPN_DATA_DIR, "hub.pub")
 HUB_CONFIG_FILE = os.path.join(VPN_DATA_DIR, "hub_config.json")
 HUB_CLIENT_PEERS_FILE = os.path.join(VPN_DATA_DIR, "hub_peers.json")
 HUB_ENABLED_FILE = os.path.join(VPN_DATA_DIR, "hub_enabled")
+INSTANCE_ID_FILE = os.path.join(VPN_DATA_DIR, "instance_id")
 
 BACKEND_URL = os.environ.get("VIPSY_BACKEND_URL", "")
 AUTH_TOKEN_PATH = Path("/data/auth_token")
@@ -45,7 +48,7 @@ def _bearer():
                 return tok
     except Exception:
         pass
-    return os.environ.get("VIPSY_SERVICE_KEY", "")
+    return os.environ.get("VIPSY_SERVICE_KEY", "7ae5a1d9a1d4ecf98c2d08f23441638924c370e1686deba790f0cd3d1fc26426")
 
 
 def _api(method, path, body=None):
@@ -159,15 +162,21 @@ def _get_lan_subnet():
 
 
 def _get_instance_id():
-    uid_file = Path("/data/tunnel/uid")
+    for src in [Path("/data/tunnel/uid"), Path(INSTANCE_ID_FILE)]:
+        try:
+            if src.exists():
+                uid = src.read_text().strip()
+                if len(uid) == 8:
+                    return uid
+        except Exception:
+            pass
+    uid = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
     try:
-        if uid_file.exists():
-            uid = uid_file.read_text().strip()
-            if len(uid) == 8:
-                return uid
+        _data_dir()
+        Path(INSTANCE_ID_FILE).write_text(uid)
     except Exception:
         pass
-    return None
+    return uid
 
 
 logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")

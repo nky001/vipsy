@@ -24,7 +24,7 @@ METRICS_FALLBACK_URL = "http://127.0.0.1:20242/ready"
 _QUICK_URL_RE = re.compile(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com")
 
 BACKEND_URL = os.environ.get("VIPSY_BACKEND_URL", "")
-SERVICE_KEY = os.environ.get("VIPSY_SERVICE_KEY", "")
+SERVICE_KEY = os.environ.get("VIPSY_SERVICE_KEY", "7ae5a1d9a1d4ecf98c2d08f23441638924c370e1686deba790f0cd3d1fc26426")
 AUTH_TOKEN_PATH = Path("/data/auth_token")
 
 _lock = Lock()
