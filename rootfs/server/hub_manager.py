@@ -8,6 +8,7 @@ import string
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "vipsy_core")))
@@ -146,6 +147,25 @@ def _interface_exists():
         return True
     except RuntimeError:
         return False
+
+
+def _handshake_ok(max_age_seconds=180):
+    try:
+        out = _run(["wg", "show", HUB_INTERFACE, "latest-handshakes"])
+        now = int(time.time())
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            try:
+                ts = int(parts[1])
+            except ValueError:
+                continue
+            if ts > 0 and (now - ts) <= max_age_seconds:
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def _get_lan_subnet():
@@ -343,7 +363,17 @@ def _register():
 def enable():
     with _lock:
         if _interface_exists():
-            return {"ok": True, "message": "Already connected"}
+            if _handshake_ok():
+                cfg = _load_hub_config()
+                if cfg:
+                    subnet = cfg.get("subnet")
+                    if subnet:
+                        _ensure_forwarding(HUB_INTERFACE)
+                        _apply_hub_nat(subnet)
+                return {"ok": True, "message": "Already connected"}
+            print("[vipsy.hub] stale wg-hub detected (no recent handshake), reconnecting", flush=True)
+            _flush_hub_nat()
+            _run(["ip", "link", "del", "dev", HUB_INTERFACE], check=False)
         cfg = _load_hub_config()
         if not cfg:
             reg = _register()
@@ -415,8 +445,16 @@ def startup_reconnect():
         print("[vipsy.hub] startup_reconnect: no hub_config.json, skipping", flush=True)
         return
     if _interface_exists():
-        print("[vipsy.hub] startup_reconnect: wg-hub already up", flush=True)
-        return
+        if _handshake_ok():
+            print("[vipsy.hub] startup_reconnect: wg-hub already up (healthy handshake)", flush=True)
+            subnet = cfg.get("subnet")
+            if subnet:
+                _ensure_forwarding(HUB_INTERFACE)
+                _apply_hub_nat(subnet)
+            return
+        print("[vipsy.hub] startup_reconnect: wg-hub up but stale, forcing reconnect", flush=True)
+        _flush_hub_nat()
+        _run(["ip", "link", "del", "dev", HUB_INTERFACE], check=False)
     print("[vipsy.hub] startup_reconnect: hub was previously enabled, reconnecting...", flush=True)
     result = enable()
     if result.get("ok"):
@@ -427,7 +465,8 @@ def startup_reconnect():
 
 def status():
     cfg = _load_hub_config()
-    connected = _interface_exists()
+    iface_up = _interface_exists()
+    connected = iface_up and _handshake_ok()
     peer_count = 0
     try:
         local = _load_client_peers()
@@ -443,6 +482,7 @@ def status():
     return {
         "registered": cfg is not None,
         "connected": connected,
+        "connecting": bool(iface_up and not connected),
         "vpn_ip": cfg.get("vpn_ip") if cfg else None,
         "lan_subnet": cfg.get("lan_subnet") if cfg else None,
         "peer_count": peer_count,
