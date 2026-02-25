@@ -167,6 +167,27 @@ def _handshake_ok(max_age_seconds=180):
         pass
     return False
 
+def _latest_handshake_age_seconds():
+    try:
+        out = _run(["wg", "show", HUB_INTERFACE, "latest-handshakes"])
+        now = int(time.time())
+        ages = []
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            try:
+                ts = int(parts[1])
+            except ValueError:
+                continue
+            if ts > 0:
+                ages.append(max(0, now - ts))
+        if ages:
+            return min(ages)
+    except Exception:
+        pass
+    return None
+
 
 def _get_lan_subnet():
     host_cidr = os.environ.get("HOST_CIDR", "")
@@ -291,12 +312,10 @@ def _ensure_forwarding(iface=None):
             enabled = f.read().strip() == "1"
     except Exception:
         pass
-    print(f"[vipsy.hub] ip_forward={enabled} iface={iface}", flush=True)
-    return enabled
-
-
-def _apply_hub_nat(hub_subnet):
-    _ensure_forwarding(HUB_INTERFACE)
+        reg = _register()
+        if not reg.get("ok"):
+            return reg
+        cfg = _load_hub_config()
     lan = os.environ.get("HOST_CIDR", "")
     if not lan or "/" not in lan:
         host_ip = os.environ.get("HOST_IP", "")
@@ -375,11 +394,13 @@ def enable():
             _flush_hub_nat()
             _run(["ip", "link", "del", "dev", HUB_INTERFACE], check=False)
         cfg = _load_hub_config()
-        if not cfg:
-            reg = _register()
-            if not reg.get("ok"):
-                return reg
-            cfg = _load_hub_config()
+        reg = _register()
+        if reg.get("ok"):
+            cfg = reg.get("config") or _load_hub_config()
+        elif not cfg:
+            return reg
+        else:
+            print(f"[vipsy.hub] register refresh failed, using cached config: {reg.get('error')}", flush=True)
         if not cfg:
             return {"ok": False, "error": "Registration failed"}
         privkey, _ = _get_or_create_hub_keys()
@@ -418,6 +439,7 @@ def enable():
             except Exception:
                 pass
             return {"ok": False, "error": str(e)}
+
 
 
 def disable():
@@ -467,6 +489,18 @@ def status():
     cfg = _load_hub_config()
     iface_up = _interface_exists()
     connected = iface_up and _handshake_ok()
+    handshake_age = _latest_handshake_age_seconds() if iface_up else None
+    peer_endpoint = None
+    if iface_up:
+        try:
+            out = _run(["wg", "show", HUB_INTERFACE, "endpoints"])
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) >= 2:
+                    peer_endpoint = parts[1]
+                    break
+        except Exception:
+            pass
     peer_count = 0
     try:
         local = _load_client_peers()
@@ -483,6 +517,10 @@ def status():
         "registered": cfg is not None,
         "connected": connected,
         "connecting": bool(iface_up and not connected),
+        "handshake_age_seconds": handshake_age,
+        "peer_endpoint": peer_endpoint,
+        "vps_endpoint": cfg.get("vps_endpoint") if cfg else None,
+        "instance_id": cfg.get("instance_id") if cfg else _get_instance_id(),
         "vpn_ip": cfg.get("vpn_ip") if cfg else None,
         "lan_subnet": cfg.get("lan_subnet") if cfg else None,
         "peer_count": peer_count,
