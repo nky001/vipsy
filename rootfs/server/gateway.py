@@ -666,6 +666,6 @@ def _index_context(**extra):
 
 
 if __name__ == "__main__":
-    tunnel_manager.startup_start()
+    tunnel_manager.start()
     hub_manager.startup_reconnect()
     app.run(host="0.0.0.0", port=INGRESS_PORT)
