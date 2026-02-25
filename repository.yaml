@@ -1,12 +1,12 @@
 name: Vipsy Add-on Repository
-url: https://github.com/nky001/vipsy
-maintainer: Nitish
+url: https://github.com/nky001/vipsy 
+maintainer: Your Name <you@example.com>
 
 addons:
   - slug: vipsy
     name: Vipsy
     description: Secure gateway add-on for Home Assistant OS.
-    version: "2.6.6"
+    version: "2.6.8"
     url: https://github.com/nky001/vipsy
     startup: services
     boot: auto

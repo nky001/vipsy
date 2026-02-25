@@ -32,7 +32,7 @@ HA_CORE_HOST = os.environ.get("HA_CORE_HOST", "homeassistant")
 HA_CORE_PORT = int(os.environ.get("HA_CORE_PORT", 8123))
 HTTPS_HOST_PORT = int(os.environ.get("HTTPS_HOST_PORT", 443))
 AUTH_TOKEN_PATH = Path("/data/auth_token")
-BACKEND_URL = os.environ.get("VIPSY_BACKEND_URL", "")
+BACKEND_URL = "https://vipsy-backend.nitinexus.workers.dev"
 
 
 def load_options():
@@ -395,8 +395,7 @@ def oauth_finish():
         return jsonify(ok=False, error=err_msg), 400
     _save_auth_token(result["data"]["token"])
     tunnel_manager.reload_auth_token()
-    if tunnel_manager.is_enabled():
-        threading.Thread(target=tunnel_manager.try_upgrade_to_static, daemon=True).start()
+    threading.Thread(target=tunnel_manager.try_upgrade_to_static, daemon=True).start()
     return jsonify(ok=True)
 
 
@@ -449,6 +448,11 @@ def auth_poll():
 
 @app.route("/logout")
 def logout():
+    try:
+        tunnel_manager.deprovision()
+    except Exception:
+        pass
+    hub_manager.reload_auth_cache()
     AUTH_TOKEN_PATH.unlink(missing_ok=True)
     tunnel_manager.reload_auth_token()
     return redirect(f"{INGRESS_ENTRY}/")
@@ -541,53 +545,6 @@ def vpn_peer_qr(peer_id):
 
 
 
-@app.route("/api/debug/network")
-def debug_network():
-    info = {}
-    try:
-        with open("/proc/sys/net/ipv4/ip_forward") as f:
-            info["ip_forward"] = f.read().strip()
-    except Exception as e:
-        info["ip_forward"] = f"error: {e}"
-    try:
-        with open("/proc/sys/net/ipv4/conf/all/rp_filter") as f:
-            info["rp_filter_all"] = f.read().strip()
-    except Exception as e:
-        info["rp_filter_all"] = f"error: {e}"
-    for iface in ["wg-hub", "wg0"]:
-        for key in ["rp_filter", "forwarding"]:
-            try:
-                with open(f"/proc/sys/net/ipv4/conf/{iface}/{key}") as f:
-                    info[f"{iface}_{key}"] = f.read().strip()
-            except Exception:
-                info[f"{iface}_{key}"] = "n/a"
-    def _cmd(args):
-        try:
-            r = subprocess.run(args, capture_output=True, text=True, timeout=10)
-            return r.stdout.strip()
-        except Exception as e:
-            return f"error: {e}"
-    info["iptables_version"] = _cmd(["iptables", "--version"])
-    info["iptables_forward"] = _cmd(["iptables", "-L", "FORWARD", "-n", "-v", "--line-numbers"])
-    info["iptables_hub_fwd"] = _cmd(["iptables", "-L", "VIPSY-HUB-FWD", "-n", "-v"])
-    info["iptables_vpn_fwd"] = _cmd(["iptables", "-L", "VIPSY-VPN-FWD", "-n", "-v"])
-    info["iptables_docker_user"] = _cmd(["iptables", "-L", "DOCKER-USER", "-n", "-v"])
-    info["iptables_nat"] = _cmd(["iptables", "-t", "nat", "-L", "POSTROUTING", "-n", "-v", "--line-numbers"])
-    info["iptables_hub_nat"] = _cmd(["iptables", "-t", "nat", "-L", "VIPSY-HUB-NAT", "-n", "-v"])
-    info["iptables_vpn_nat"] = _cmd(["iptables", "-t", "nat", "-L", "VIPSY-VPN-NAT", "-n", "-v"])
-    info["ip_route"] = _cmd(["ip", "route"])
-    info["ip_addr"] = _cmd(["ip", "-br", "addr"])
-    info["wg_show"] = _cmd(["wg", "show"])
-    info["nft_list"] = _cmd(["nft", "list", "ruleset"])
-    info["host_cidr"] = os.environ.get("HOST_CIDR", "")
-    info["host_ip"] = os.environ.get("HOST_IP", "")
-    try:
-        info["proc_sys_writable"] = os.access("/proc/sys/net/ipv4/ip_forward", os.W_OK)
-    except Exception:
-        info["proc_sys_writable"] = "unknown"
-    return jsonify(info)
-
-
 @app.route("/api/hub/status")
 def hub_status():
     return jsonify(ok=True, data=hub_manager.status())
@@ -626,6 +583,8 @@ def hub_add_peer():
 
 @app.route("/api/hub/peers/<peer_id>", methods=["DELETE"])
 def hub_remove_peer(peer_id):
+    if not _PEER_ID_RE.match(peer_id):
+        return jsonify(ok=False, error="Invalid peer ID"), 400
     result = hub_manager.remove_peer(peer_id)
     code = 200 if result.get("ok") else 500
     return jsonify(result), code
@@ -633,6 +592,8 @@ def hub_remove_peer(peer_id):
 
 @app.route("/api/hub/peers/<peer_id>/config")
 def hub_peer_config(peer_id):
+    if not _PEER_ID_RE.match(peer_id):
+        return jsonify(ok=False, error="Invalid peer ID"), 400
     cfg_text = hub_manager.get_peer_config(peer_id)
     if not cfg_text:
         return jsonify(ok=False, error="Config not available — re-add peer to regenerate"), 404
@@ -643,11 +604,24 @@ def hub_peer_config(peer_id):
 
 @app.route("/api/hub/peers/<peer_id>/qr")
 def hub_peer_qr(peer_id):
+    if not _PEER_ID_RE.match(peer_id):
+        return jsonify(ok=False, error="Invalid peer ID"), 400
     qr_data = hub_manager.get_peer_qr(peer_id)
     if not qr_data:
         return jsonify(ok=False, error="Peer not found or QR generation failed"), 404
     from flask import Response
     return Response(qr_data, mimetype="image/png")
+
+
+def _hub_peers_for_template():
+    try:
+        result = hub_manager.list_peers()
+        if result.get("ok"):
+            peers = result.get("peers", [])
+            return [p for p in peers if p.get("role") == "client" and p.get("active") is not False]
+    except Exception:
+        pass
+    return []
 
 
 def _index_context(**extra):
@@ -678,9 +652,10 @@ def _index_context(**extra):
         vpn=vpn_manager.status(),
         vpn_peers=vpn_manager.list_peers(),
         hub=hub_manager.status(),
+        hub_peers=_hub_peers_for_template(),
         now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         ingress_entry=INGRESS_ENTRY,
-        version=options.get("_version", "2.6.6"),
+        version=options.get("_version", "2.6.8"),
         logged_in=bool(auth_token),
         backend_available=bool(BACKEND_URL),
         backend_url=BACKEND_URL,
@@ -691,4 +666,6 @@ def _index_context(**extra):
 
 
 if __name__ == "__main__":
+    tunnel_manager.startup_start()
+    hub_manager.startup_reconnect()
     app.run(host="0.0.0.0", port=INGRESS_PORT)

@@ -1,6 +1,6 @@
 {
   "name": "Vipsy",
-  "version": "2.6.6",
+  "version": "2.6.8",
   "slug": "vipsy",
   "description": "Secure remote access to Home Assistant — TLS gateway, Cloudflare Tunnel, and WireGuard VPN for LAN access.",
   "url": "https://github.com/nky001/vipsy",
@@ -30,8 +30,6 @@
   "map": ["ssl:ro", "config:rw"],
   "options": {
     "domain": "",
-    "certfile": "fullchain.pem",
-    "keyfile": "privkey.pem",
     "enable_turn": true,
     "tunnel_enabled": false,
     "vpn_subnet": "10.8.0.0/24",
@@ -39,8 +37,6 @@
   },
   "schema": {
     "domain": "str",
-    "certfile": "str",
-    "keyfile": "str",
     "enable_turn": "bool",
     "tunnel_enabled": "bool",
     "vpn_subnet": "str",
