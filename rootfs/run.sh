@@ -142,10 +142,16 @@ nft list chain ip filter FORWARD 2>&1 | head -8 || true
 nft list chain ip filter DOCKER-USER 2>&1 | head -8 || true
 nft list chain ip nat POSTROUTING 2>&1 | head -8 || true
 
+echo "[vipsy] cleaning stale vipsy nft tables"
+for t in "inet vipsy" "inet vipsy_hub_nat" "inet vipsy_vpn_nat" "ip vipsy_hub_nat" "ip vipsy_vpn_nat"; do
+    nft list table $t >/dev/null 2>&1 && { nft delete table $t 2>&1; echo "[vipsy] cleaned stale $t"; } || true
+done
+
 echo "[vipsy] preparing VPN data directory"
 mkdir -p /data/wireguard
 echo "[vipsy] VPN startup cleanup"
 python3 -c "import sys; sys.path.insert(0, '/server'); import vpn_manager; vpn_manager.startup_cleanup()" 2>/dev/null || echo "[vipsy] VPN cleanup skipped"
+python3 -c "import sys; sys.path.insert(0, '/server'); import hub_manager; hub_manager.startup_cleanup()" 2>/dev/null || echo "[vipsy] hub cleanup skipped"
 
 echo "[vipsy] hub startup reconnect"
 python3 -c "import sys; sys.path.insert(0, '/server'); import hub_manager; hub_manager.startup_reconnect()" || echo "[vipsy] hub reconnect skipped"

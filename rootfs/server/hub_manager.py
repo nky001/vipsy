@@ -35,6 +35,7 @@ AUTH_TOKEN_PATH = Path("/data/auth_token")
 
 _lock = threading.Lock()
 _auth_cache: str = ""
+_last_enable_time: float = 0.0
 
 
 def _bearer():
@@ -149,46 +150,6 @@ def _interface_exists():
         return False
 
 
-def _handshake_ok(max_age_seconds=180):
-    try:
-        out = _run(["wg", "show", HUB_INTERFACE, "latest-handshakes"])
-        now = int(time.time())
-        for line in out.splitlines():
-            parts = line.split()
-            if len(parts) < 2:
-                continue
-            try:
-                ts = int(parts[1])
-            except ValueError:
-                continue
-            if ts > 0 and (now - ts) <= max_age_seconds:
-                return True
-    except Exception:
-        pass
-    return False
-
-def _latest_handshake_age_seconds():
-    try:
-        out = _run(["wg", "show", HUB_INTERFACE, "latest-handshakes"])
-        now = int(time.time())
-        ages = []
-        for line in out.splitlines():
-            parts = line.split()
-            if len(parts) < 2:
-                continue
-            try:
-                ts = int(parts[1])
-            except ValueError:
-                continue
-            if ts > 0:
-                ages.append(max(0, now - ts))
-        if ages:
-            return min(ages)
-    except Exception:
-        pass
-    return None
-
-
 def _get_lan_subnet():
     host_cidr = os.environ.get("HOST_CIDR", "")
     if host_cidr and "/" in host_cidr:
@@ -248,18 +209,17 @@ def _remove_nft_rules_by_comment(comment):
                     capture_output=True, text=True, timeout=10,
                 )
                 if r.returncode != 0:
-                    print(f"[vipsy.hub] nft list chain {_NFT_FAMILY} {tbl} {chain_name} failed: {r.stderr.strip()[:200]}", flush=True)
                     continue
                 for line in r.stdout.splitlines():
                     if f'comment "{comment}"' in line:
                         m = re.search(r'# handle (\d+)', line)
                         if m:
                             _nft_cmd("delete", "rule", _NFT_FAMILY, tbl, chain_name, "handle", m.group(1))
-            except Exception as e:
-                print(f"[vipsy.hub] nft rule cleanup error ({tbl}/{chain_name}): {e}", flush=True)
+            except Exception:
+                pass
 
 
-def _inject_docker_rules(iface, comment, hub_subnet, lan_subnet):
+def _inject_docker_rules(iface, comment, hub_subnet):
     _remove_nft_rules_by_comment(comment)
     print(f"[vipsy.hub] injecting rules into {_NFT_FAMILY} filter + nat for {iface}", flush=True)
     results = []
@@ -272,7 +232,7 @@ def _inject_docker_rules(iface, comment, hub_subnet, lan_subnet):
         results.extend([ok1, ok2])
         print(f"[vipsy.hub] {chain}: iif_accept={ok1} oif_related={ok2}", flush=True)
     ok_nat = _nft_cmd("add", "rule", _NFT_FAMILY, "nat", "POSTROUTING",
-                      "ip", "saddr", hub_subnet, "ip", "daddr", lan_subnet, "oifname", "!=", iface,
+                      "ip", "saddr", hub_subnet, "oifname", "!=", iface,
                       "masquerade", "comment", f'"{comment}"')
     results.append(ok_nat)
     print(f"[vipsy.hub] POSTROUTING masquerade: {ok_nat}", flush=True)
@@ -312,7 +272,30 @@ def _ensure_forwarding(iface=None):
             enabled = f.read().strip() == "1"
     except Exception:
         pass
+    print(f"[vipsy.hub] ip_forward={enabled} iface={iface}", flush=True)
     return enabled
+
+
+def _latest_handshake_age_seconds():
+    try:
+        r = subprocess.run(["wg", "show", HUB_INTERFACE, "latest-handshakes"],
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode != 0:
+            return None
+        for line in r.stdout.strip().splitlines():
+            parts = line.split()
+            if len(parts) >= 2:
+                ts = int(parts[1])
+                if ts > 0:
+                    return time.time() - ts
+    except Exception:
+        pass
+    return None
+
+
+def _handshake_ok(max_age_seconds=180):
+    age = _latest_handshake_age_seconds()
+    return age is not None and age < max_age_seconds
 
 
 def _apply_hub_nat(hub_subnet):
@@ -325,8 +308,10 @@ def _apply_hub_nat(hub_subnet):
     except ValueError:
         lan = "192.168.1.0/24"
     print(f"[vipsy.hub] apply hub NAT: hub={hub_subnet} lan={lan} iface={HUB_INTERFACE}", flush=True)
-    ok = _inject_docker_rules(HUB_INTERFACE, _HUB_NFT_COMMENT, hub_subnet, lan)
+
+    ok = _inject_docker_rules(HUB_INTERFACE, _HUB_NFT_COMMENT, hub_subnet)
     print(f"[vipsy.hub] rules injected: {ok}", flush=True)
+
     for lbl, cmd in [
         ("DOCKER-USER", ["nft", "list", "chain", _NFT_FAMILY, "filter", "DOCKER-USER"]),
         ("FORWARD", ["nft", "list", "chain", _NFT_FAMILY, "filter", "FORWARD"]),
@@ -378,29 +363,28 @@ def _register():
 
 
 def enable():
+    global _last_enable_time
     with _lock:
         if _interface_exists():
             if _handshake_ok():
-                cfg = _load_hub_config()
-                if cfg:
-                    subnet = cfg.get("subnet")
-                    if subnet:
-                        _ensure_forwarding(HUB_INTERFACE)
-                        _apply_hub_nat(subnet)
                 return {"ok": True, "message": "Already connected"}
-            print("[vipsy.hub] stale wg-hub detected (no recent handshake), reconnecting", flush=True)
+            print("[vipsy.hub] enable: interface up but stale handshake, rebuilding", flush=True)
             _flush_hub_nat()
-            _run(["ip", "link", "del", "dev", HUB_INTERFACE], check=False)
-        cfg = _load_hub_config()
+            try:
+                _run(["ip", "link", "del", "dev", HUB_INTERFACE], check=False)
+            except Exception:
+                pass
         reg = _register()
         if reg.get("ok"):
             cfg = reg.get("config") or _load_hub_config()
-        elif not cfg:
-            return reg
         else:
-            print(f"[vipsy.hub] register refresh failed, using cached config: {reg.get('error')}", flush=True)
+            cfg = _load_hub_config()
+            if cfg:
+                print(f"[vipsy.hub] register failed, using cached config: {reg.get('error')}", flush=True)
+            else:
+                return reg
         if not cfg:
-            return {"ok": False, "error": "Registration failed"}
+            return {"ok": False, "error": "Registration failed and no cached config"}
         privkey, _ = _get_or_create_hub_keys()
         vpn_ip = cfg["vpn_ip"]
         subnet = cfg["subnet"]
@@ -423,6 +407,7 @@ def enable():
             _run(["ip", "link", "set", "up", "dev", HUB_INTERFACE])
             fwd_ok = _ensure_forwarding(HUB_INTERFACE)
             _apply_hub_nat(subnet)
+            _last_enable_time = time.time()
             try:
                 Path(HUB_ENABLED_FILE).write_text("1")
             except Exception:
@@ -437,7 +422,6 @@ def enable():
             except Exception:
                 pass
             return {"ok": False, "error": str(e)}
-
 
 
 def disable():
@@ -455,26 +439,22 @@ def disable():
         return {"ok": True, "message": "Remote access disabled"}
 
 
+def startup_cleanup():
+    print("[vipsy.hub] startup cleanup", flush=True)
+    _flush_hub_nat()
+    if _interface_exists():
+        print("[vipsy.hub] startup cleanup: removing stale wg-hub", flush=True)
+        try:
+            _run(["ip", "link", "del", "dev", HUB_INTERFACE], check=False)
+        except Exception:
+            pass
+
+
 def startup_reconnect():
     enabled_flag = Path(HUB_ENABLED_FILE)
     if not enabled_flag.exists():
         print("[vipsy.hub] startup_reconnect: no hub_enabled flag, skipping", flush=True)
         return
-    cfg = _load_hub_config()
-    if not cfg:
-        print("[vipsy.hub] startup_reconnect: no hub_config.json, skipping", flush=True)
-        return
-    if _interface_exists():
-        if _handshake_ok():
-            print("[vipsy.hub] startup_reconnect: wg-hub already up (healthy handshake)", flush=True)
-            subnet = cfg.get("subnet")
-            if subnet:
-                _ensure_forwarding(HUB_INTERFACE)
-                _apply_hub_nat(subnet)
-            return
-        print("[vipsy.hub] startup_reconnect: wg-hub up but stale, forcing reconnect", flush=True)
-        _flush_hub_nat()
-        _run(["ip", "link", "del", "dev", HUB_INTERFACE], check=False)
     print("[vipsy.hub] startup_reconnect: hub was previously enabled, reconnecting...", flush=True)
     result = enable()
     if result.get("ok"):
@@ -485,20 +465,7 @@ def startup_reconnect():
 
 def status():
     cfg = _load_hub_config()
-    iface_up = _interface_exists()
-    connected = iface_up and _handshake_ok()
-    handshake_age = _latest_handshake_age_seconds() if iface_up else None
-    peer_endpoint = None
-    if iface_up:
-        try:
-            out = _run(["wg", "show", HUB_INTERFACE, "endpoints"])
-            for line in out.splitlines():
-                parts = line.split()
-                if len(parts) >= 2:
-                    peer_endpoint = parts[1]
-                    break
-        except Exception:
-            pass
+    connected = _interface_exists()
     peer_count = 0
     try:
         local = _load_client_peers()
@@ -514,11 +481,6 @@ def status():
     return {
         "registered": cfg is not None,
         "connected": connected,
-        "connecting": bool(iface_up and not connected),
-        "handshake_age_seconds": handshake_age,
-        "peer_endpoint": peer_endpoint,
-        "vps_endpoint": cfg.get("vps_endpoint") if cfg else None,
-        "instance_id": cfg.get("instance_id") if cfg else _get_instance_id(),
         "vpn_ip": cfg.get("vpn_ip") if cfg else None,
         "lan_subnet": cfg.get("lan_subnet") if cfg else None,
         "peer_count": peer_count,
