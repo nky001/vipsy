@@ -1,6 +1,6 @@
 {
   "name": "Vipsy",
-  "version": "2.6.8",
+  "version": "2.6.9",
   "slug": "vipsy",
   "description": "Secure remote access to Home Assistant — TLS gateway, Cloudflare Tunnel, and WireGuard VPN for LAN access.",
   "url": "https://github.com/nky001/vipsy",
