@@ -6,7 +6,7 @@ addons:
   - slug: vipsy
     name: Vipsy
     description: Secure gateway add-on for Home Assistant OS.
-    version: "2.6.2"
+    version: "2.6.3"
     url: https://github.com/nky001/vipsy
     startup: services
     boot: auto
