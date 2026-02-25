@@ -312,10 +312,10 @@ def _ensure_forwarding(iface=None):
             enabled = f.read().strip() == "1"
     except Exception:
         pass
-        reg = _register()
-        if not reg.get("ok"):
-            return reg
-        cfg = _load_hub_config()
+    return enabled
+
+
+def _apply_hub_nat(hub_subnet):
     lan = os.environ.get("HOST_CIDR", "")
     if not lan or "/" not in lan:
         host_ip = os.environ.get("HOST_IP", "")
@@ -325,10 +325,8 @@ def _ensure_forwarding(iface=None):
     except ValueError:
         lan = "192.168.1.0/24"
     print(f"[vipsy.hub] apply hub NAT: hub={hub_subnet} lan={lan} iface={HUB_INTERFACE}", flush=True)
-
     ok = _inject_docker_rules(HUB_INTERFACE, _HUB_NFT_COMMENT, hub_subnet, lan)
     print(f"[vipsy.hub] rules injected: {ok}", flush=True)
-
     for lbl, cmd in [
         ("DOCKER-USER", ["nft", "list", "chain", _NFT_FAMILY, "filter", "DOCKER-USER"]),
         ("FORWARD", ["nft", "list", "chain", _NFT_FAMILY, "filter", "FORWARD"]),
