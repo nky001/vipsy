@@ -655,7 +655,7 @@ def _index_context(**extra):
         hub_peers=_hub_peers_for_template(),
         now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         ingress_entry=INGRESS_ENTRY,
-        version=options.get("_version", "2.7.0"),
+        version=options.get("_version", "2.7.1"),
         logged_in=bool(auth_token),
         backend_available=bool(BACKEND_URL),
         backend_url=BACKEND_URL,

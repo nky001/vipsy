@@ -35,6 +35,9 @@ COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
 
 COPY rootfs /
+
+COPY logo.png /icon.png
+
 COPY logo.png /server/static/logo.png
 
 RUN find /run.sh /caddy /server /coturn -type f \( -name '*.sh' -o -name '*.conf' -o -name '*.py' \) \
