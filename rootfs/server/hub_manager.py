@@ -53,6 +53,11 @@ def _bearer():
     return os.environ.get("VIPSY_SERVICE_KEY", "7ae5a1d9a1d4ecf98c2d08f23441638924c370e1686deba790f0cd3d1fc26426")
 
 
+def reload_auth_cache():
+    global _auth_cache
+    _auth_cache = ""
+
+
 def _api(method, path, body=None):
     url = f"{BACKEND_URL.rstrip('/')}{path}"
     data = json.dumps(body).encode() if body else None
