@@ -149,6 +149,7 @@ def _register():
         "dns_ok": data.get("dns_ok", False),
     }
     _save_creds(creds)
+    _provision_error = ""
     return creds
 
 
@@ -311,6 +312,7 @@ def start():
             _process = subprocess.Popen(cmd, stdout=log_fd, stderr=log_fd)
             log_fd.close()
             TUNNEL_PID_FILE.write_text(str(_process.pid))
+            _provision_error = ""
             if _backend_available():
                 _start_fallback()
             return True

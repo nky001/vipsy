@@ -1,103 +1,47 @@
 # Vipsy — Quick Reference
 
-Vipsy is a Home Assistant add‑on for secure remote access.
-It bundles:
-
-* HTTPS reverse proxy (Caddy) to your HA core
-* Optional Cloudflare Tunnel (egress‑only; no port forwarding)
-* Optional WireGuard VPN providing full LAN access
-
-The add‑on runs in host network mode and exposes an ingress UI on port 8099.
+Vipsy is a Home Assistant add-on that gives you a safe ingress UI, optional Cloudflare Tunnel, and optional WireGuard LAN access.
 
 ---
 
 ## Configuration
 
-Set options from the Supervisor add‑on configuration screen. Most are optional; minimal setup is:
+Set options from the Supervisor add-on configuration screen. Keep it simple:
 
 ```yaml
-domain: ""           # public domain (leave blank for LAN-only)
-enable_turn: true      # coturn for WebRTC/voice
-tunnel_enabled: false  # set true if you want a cloudflared tunnel
-vpn_subnet: 10.8.0.0/24 # change only if this overlaps your LAN
-vpn_port: 51820        # UDP port for WireGuard; forward it on your router
+tunnel_enabled: false   # flip true to run the Cloudflare Tunnel
+vpn_enabled: false      # turn on only when you need WireGuard VPN
+vpn_subnet: 10.8.0.0/24 # change only if this overlaps another network you actually use
 ```
 
-The add‑on will auto‑generate a self‑signed TLS certificate if none is provided in
-`/ssl`. For a trusted cert use the Duck DNS or Let’s Encrypt add‑on and point
-`certfile`/`keyfile` accordingly.
+The `domain` field currently does nothing, so you can leave it blank. If you do have your own TLS cert/key pair, drop them into `/ssl` before starting the add-on; otherwise the add-on will auto-generate a self-signed cert.
 
 ---
 
 ## Cloudflare Tunnel
 
-Enable `tunnel_enabled` to have the add‑on spawn `cloudflared` and
-establish an outbound tunnel.  With a valid backend service key you get a
-stable subdomain (e.g. `abc12345-vipsy.example.com`).  Otherwise an
-ephemeral `trycloudflare.com` URL is used and changes on restart.
+1. Enable the toggle in the add-on or ingress UI and start the tunnel; this launches `cloudflared` and gives you a temporary `trycloudflare.com` URL.
+2. Open the **Sign in with Google** flow, complete the login, and the dashboard will refresh with your **static** URL (`<id>.niti.life`).
+3. The static URL stays valid until you uninstall the add-on. If you reinstall, the static hostname is lost and you must sign in again.
+4. Every restart or update of the add-on will rotate the temporary `trycloudflare.com` URL, so only the static URL survives restarts.
 
-No inbound ports are required on your router.
+If the tunnel ever reports a backend error or timeout, the UI still works—just refresh after a moment and it should settle.
 
 ---
 
 ## WireGuard VPN
 
-### Requirements
-
-* Forward the chosen `vpn_port` (default 51820/UDP) from your router to
-  the Home Assistant host.
-* The VPN is **off by default**; enable it explicitly in the ingress UI.
-
-### Basic workflow
-
-1. **Enable VPN** – generates a server key and brings up `wg-hub`.
-2. **Add a peer** – supply a name, TTL (0=no expiry), and optional
-   “persistent” flag.  Copy the config text, download the `.conf` file or
-   scan the QR code.  The private key is shown only once.
-3. **Import on client** – use the WireGuard app on desktop/mobile or
-   `wg-quick` on Linux.
-4. **Connect** – toggle on the tunnel; after a handshake you’re on the LAN.
-
-Configurations use split‑tunnel: only the LAN subnet and VPN subnet are
-routed through WireGuard.  Internet traffic takes the client’s normal path.
-
-### Peer management
-
-| Action | Where |
-|--------|-------|
-| List peers | Dashboard table |
-| Download config | ⬇ button |
-| Show QR code | ◻ button |
-| Remove peer | ✕ button |
-| Kill switch (drop all) | Red **Kill Switch** button |
-
-Peers expire automatically.  A background thread checks every 30 s and
-removes expired entries; persistent peers survive restarts regardless of
-TTL.
+* Enable the VPN explicitly via the dashboard (it does not auto-start).
+* Add peers from the UI, copy/download the `.conf`, or scan the QR.
+* Clients get split-tunnel configs: only the LAN and VPN subnets go through WireGuard; other traffic follows the client’s normal route.
+* Persistent peers survive restarts even if they have a TTL.
+* Use the red **Kill Switch** button to drop every peer instantly.
 
 ---
 
-## Troubleshooting
+## Notes
 
-*No handshake / cannot access LAN* → confirm UDP port is forwarded and the
-public IP reported on the dashboard matches your actual IP.  On the VPS
-`wg show wg0` should list the home peer with `allowed ips` containing both
-`10.100.0.x/32` and your LAN CIDR.
-
-*Overlap warning* → change `vpn_subnet` if it overlaps any network you
-offline or remote device uses.
-
-*Icon not appearing in Supervisor* → ensure an `icon.png` file is present
-at the container root (the Dockerfile now copies it there).
-
----
-
-## Security notes
-
-* Ingress UI is accessible only from the Supervisor network.
-* TLS always enforced; no HTTP only option.
-* Peer keys live under `/data/wireguard` with `0600` permissions.
-* NAT and forwarding rules are added only when VPN is active and flushed
-  when it stops.
-* WireGuard keep‑alive set to 25 s; every peer gets a unique preshared key.
-
+* The add-on’s ingress UI is reachable only from the Supervisor network.
+* WireGuard server keys live under `/data/wireguard` with tight (`0600`) permissions.
+* NAT/forwarding rules appear only when VPN is active and are removed when it stops.
+* The status page reports whether the tunnel is running in quick or static mode, and whether WireGuard handshakes are healthy.
