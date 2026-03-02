@@ -124,11 +124,11 @@ class AgentClient:
         import websockets
         import websockets.client
         ssl_ctx = ssl.create_default_context()
-        extra_headers = {"Authorization": f"Bearer {token}"}
+        headers = {"Authorization": f"Bearer {token}"}
         self._ws = await websockets.connect(
             url,
             ssl=ssl_ctx,
-            additional_headers=extra_headers,
+            extra_headers=headers,
             max_size=2 ** 17,
             ping_interval=None,
             close_timeout=5,
@@ -547,7 +547,8 @@ def _loop_entry():
     except Exception:
         pass
     finally:
-        _event_loop.close()
+        if _event_loop:
+            _event_loop.close()
 
 
 def is_enabled():
