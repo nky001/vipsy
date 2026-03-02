@@ -17,7 +17,7 @@ AGENT_STATE_FILE = Path("/data/agent_state.json")
 AGENT_ENABLED_FILE = Path("/data/agent_enabled")
 
 VPS_HOST = os.environ.get("AGENT_VPS_HOST", "")
-VPS_AGENT_PORT = int(os.environ.get("AGENT_VPS_PORT", "443"))
+VPS_AGENT_PORT = int(os.environ.get("AGENT_VPS_PORT", "8443"))
 _DEFAULT_VPS_HOST = "vipsy-vps.niti.life"
 LOCAL_RELAY_PORT = int(os.environ.get("AGENT_LOCAL_PORT", "51822"))
 
