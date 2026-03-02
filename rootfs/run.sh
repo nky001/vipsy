@@ -115,7 +115,28 @@ fi
 
 export HA_CORE_URL="http://homeassistant:8123"
 export HA_PROXY_HOST="homeassistant"
-export CADDY_HTTPS_PORT="$HTTPS_PORT"
+
+port_available() {
+    ! ss -tlnH "sport = :$1" 2>/dev/null | grep -q ":$1 " && return 0
+    return 1
+}
+
+ACTUAL_PORT="$HTTPS_PORT"
+if ! port_available "$ACTUAL_PORT"; then
+    echo "[vipsy] WARNING: port $ACTUAL_PORT is busy, trying fallback ports"
+    for FALLBACK in 8443 9443 8444 18443; do
+        if port_available "$FALLBACK"; then
+            ACTUAL_PORT="$FALLBACK"
+            echo "[vipsy] using fallback port $ACTUAL_PORT"
+            break
+        fi
+    done
+    if [ "$ACTUAL_PORT" = "$HTTPS_PORT" ]; then
+        echo "[vipsy] ERROR: all fallback ports busy, Caddy may fail to start"
+    fi
+fi
+
+export CADDY_HTTPS_PORT="$ACTUAL_PORT"
 export PUBLIC_IP="$PUBLIC_IP"
 export DOMAIN="$DOMAIN"
 export HOST_IP="$HOST_IP"

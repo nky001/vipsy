@@ -138,7 +138,7 @@ def _save_creds(creds):
 def _register():
     global _provision_error
     uid = _get_or_create_uid()
-    resp = _api("POST", "/tunnel/register", {"instance_id": uid})
+    resp = _api("POST", "/tunnel/register", {"instance_id": uid, "origin_port": HTTPS_PORT})
     if not resp.get("ok"):
         msg = resp.get("error", "Registration failed")
         _provision_error = msg

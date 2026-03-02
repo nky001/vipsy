@@ -76,7 +76,19 @@ def _get_vps_host():
     host = os.environ.get("VPS_ENDPOINT", "")
     if host and ":" in host:
         return host.split(":")[0]
-    return host
+    if host:
+        return host
+    try:
+        cfg_path = Path("/data/wireguard/hub_config.json")
+        if cfg_path.exists():
+            cfg = json.loads(cfg_path.read_text())
+            ep = cfg.get("vps_endpoint", "")
+            if ep and ":" in ep:
+                return ep.split(":")[0]
+            return ep
+    except Exception:
+        pass
+    return ""
 
 
 def _save_state(state: dict):
