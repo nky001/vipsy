@@ -483,6 +483,12 @@ def status():
             fwd = f.read().strip() == "1"
     except Exception:
         pass
+    agent_available = False
+    try:
+        import agent as _agent_mod
+        agent_available = _agent_mod.status().get("healthy", False)
+    except Exception:
+        pass
     return {
         "registered": cfg is not None,
         "connected": connected,
@@ -490,6 +496,7 @@ def status():
         "lan_subnet": cfg.get("lan_subnet") if cfg else None,
         "peer_count": peer_count,
         "forwarding_enabled": fwd,
+        "agent_relay_available": agent_available,
     }
 
 

@@ -25,6 +25,7 @@ _PEER_ID_RE = re.compile(r'^[0-9a-f]{8}$')
 import tunnel_manager
 import vpn_manager
 import hub_manager
+import agent
 
 OPTIONS_PATH = os.environ.get("OPTIONS_PATH", "/data/options.json")
 INGRESS_PORT = int(os.environ.get("INGRESS_PORT", 8099))
@@ -613,6 +614,24 @@ def hub_peer_qr(peer_id):
     return Response(qr_data, mimetype="image/png")
 
 
+@app.route("/api/agent")
+def agent_status():
+    return jsonify(agent.status())
+
+
+@app.route("/api/agent/enable", methods=["POST"])
+def agent_enable():
+    result = agent.start()
+    code = 200 if result.get("ok") else 500
+    return jsonify(result), code
+
+
+@app.route("/api/agent/disable", methods=["POST"])
+def agent_disable():
+    result = agent.stop()
+    return jsonify(result)
+
+
 def _hub_peers_for_template():
     try:
         result = hub_manager.list_peers()
@@ -653,6 +672,7 @@ def _index_context(**extra):
         vpn_peers=vpn_manager.list_peers(),
         hub=hub_manager.status(),
         hub_peers=_hub_peers_for_template(),
+        agent=agent.status(),
         now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         ingress_entry=INGRESS_ENTRY,
         version=options.get("_version", "2.7.3"),

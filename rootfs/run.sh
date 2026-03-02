@@ -9,6 +9,7 @@ ENABLE_TURN=$(jq -r '.enable_turn // true' "$OPTIONS_FILE")
 TUNNEL_ENABLED=$(jq -r '.tunnel_enabled // false' "$OPTIONS_FILE")
 VPN_SUBNET=$(jq -r '.vpn_subnet // "10.8.0.0/24"' "$OPTIONS_FILE")
 VPN_PORT=$(jq -r '.vpn_port // 51820' "$OPTIONS_FILE")
+HTTPS_PORT=$(jq -r '.https_port // 443' "$OPTIONS_FILE")
 
 SSL_CERT="/ssl/${CERTFILE}"
 SSL_KEY="/ssl/${KEYFILE}"
@@ -114,7 +115,7 @@ fi
 
 export HA_CORE_URL="http://homeassistant:8123"
 export HA_PROXY_HOST="homeassistant"
-export CADDY_HTTPS_PORT=443
+export CADDY_HTTPS_PORT="$HTTPS_PORT"
 export PUBLIC_IP="$PUBLIC_IP"
 export DOMAIN="$DOMAIN"
 export HOST_IP="$HOST_IP"
@@ -174,6 +175,9 @@ fi
 
 echo "[vipsy] starting caddy"
 caddy run --config /caddy/Caddyfile --adapter caddyfile &
+
+echo "[vipsy] agent startup reconnect"
+python3 -c "import sys; sys.path.insert(0, '/server'); import agent; agent.startup_reconnect()" 2>/dev/null || echo "[vipsy] agent reconnect skipped"
 
 echo "[vipsy] starting gateway on :8099"
 exec python3 /server/gateway.py

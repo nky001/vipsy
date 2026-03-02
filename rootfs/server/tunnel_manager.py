@@ -23,6 +23,7 @@ METRICS_URL = "http://127.0.0.1:20241/ready"
 METRICS_FALLBACK_URL = "http://127.0.0.1:20242/ready"
 _QUICK_URL_RE = re.compile(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com")
 
+HTTPS_PORT = int(os.environ.get("CADDY_HTTPS_PORT", "443"))
 BACKEND_URL = os.environ.get("VIPSY_BACKEND_URL", "")
 SERVICE_KEY = os.environ.get("VIPSY_SERVICE_KEY", "7ae5a1d9a1d4ecf98c2d08f23441638924c370e1686deba790f0cd3d1fc26426")
 AUTH_TOKEN_PATH = Path("/data/auth_token")
@@ -32,6 +33,9 @@ _process = None
 _fallback_process = None
 _provision_error: str = ""
 _auth_token_cache: str = ""
+_agent_mode: bool = False
+_agent_url: str = ""
+_agent_healthy: bool = False
 
 
 def _get_bearer_token():
@@ -225,7 +229,7 @@ def _start_fallback():
                 "--no-autoupdate",
                 "--no-tls-verify",
                 "--metrics", "127.0.0.1:20242",
-                "--url", "https://localhost:443",
+                "--url", f"https://localhost:{HTTPS_PORT}",
             ],
             stdout=log_fd,
             stderr=log_fd,
@@ -307,7 +311,7 @@ def start():
                     "cloudflared", "tunnel",
                     "--no-autoupdate",
                     "--no-tls-verify",
-                    "--url", "https://localhost:443",
+                    "--url", f"https://localhost:{HTTPS_PORT}",
                 ]
             _process = subprocess.Popen(cmd, stdout=log_fd, stderr=log_fd)
             log_fd.close()
@@ -401,7 +405,17 @@ def status():
         "fallback_url": fallback_url,
         "provider": "cloudflare",
         "error": _provision_error or None,
+        "agent_mode": _agent_mode,
+        "agent_url": _agent_url or None,
+        "agent_healthy": _agent_healthy,
     }
+
+
+def set_agent_state(enabled: bool, url: str = "", healthy: bool = False):
+    global _agent_mode, _agent_url, _agent_healthy
+    _agent_mode = enabled
+    _agent_url = url
+    _agent_healthy = healthy
 
 
 def tail_log(lines=50):

@@ -470,6 +470,30 @@
     {% endif %}
     {% endif %}
 
+    <section class="section-title">TLS Agent Relay <span class="small muted" style="font-weight:400;font-size:.75rem">(UDP-over-TLS fallback)</span></section>
+    <div class="card vpn-card">
+      <div class="stat-row">
+        <span class="stat-label">
+          <span class="dot dot--{{ 'green' if agent.healthy else ('yellow' if agent.running else 'gray') }}"></span>
+          <span>Agent Relay</span>
+        </span>
+        <div class="vpn-card__actions">
+          {% if not agent.running %}
+          <button class="btn btn--sm btn--green" id="agent-enable-btn" onclick="agentEnable()">Enable Agent</button>
+          {% else %}
+          <button class="btn btn--sm btn--red" id="agent-disable-btn" onclick="agentDisable()">Disable Agent</button>
+          {% endif %}
+        </div>
+      </div>
+      {% if agent.healthy %}
+      <div class="vpn-card__hint vpn-card__hint--ok">Agent relay connected to VPS. Streams: {{ agent.streams_active }}, RTT: {{ agent.ping_rtt_ms }}ms, Uptime: {{ agent.uptime_seconds }}s</div>
+      {% elif agent.running %}
+      <div class="vpn-card__hint vpn-card__hint--neutral">Agent is connecting to VPS... ({{ agent.reconnects }} reconnects)</div>
+      {% else %}
+      <div class="vpn-card__hint vpn-card__hint--neutral">Enable the agent relay to tunnel traffic over TLS when UDP/WireGuard is blocked by firewalls or antivirus.</div>
+      {% endif %}
+    </div>
+
     <section class="section-title">Home Assistant Core</section>
     <div class="card stat-row">
       <span class="stat-label">HA Core (:8123)</span>
@@ -531,6 +555,11 @@
             <td>Remote Access</td>
             <td><span class="dot dot--{{ 'green' if hub.connected else 'gray' }}"></span>{{ 'Up' if hub.connected else 'Off' }}</td>
             <td class="muted">Remote VPN ({{ hub.peer_count }} devices)</td>
+          </tr>
+          <tr>
+            <td>Agent Relay</td>
+            <td><span class="dot dot--{{ 'green' if agent.healthy else ('yellow' if agent.running else 'gray') }}"></span>{{ 'Connected' if agent.healthy else ('Connecting' if agent.running else 'Off') }}</td>
+            <td class="muted">TLS multiplex tunnel{% if agent.healthy %} ({{ agent.streams_active }} streams, {{ agent.ping_rtt_ms }}ms){% endif %}</td>
           </tr>
           <tr>
             <td>TLS Certificate</td>
@@ -601,6 +630,18 @@
     window.copyHubPeerConfig = function(){
       var el=document.getElementById("hub-peer-config-text");
       if(el)navigator.clipboard.writeText(el.textContent).then(function(){alert("Copied!");}).catch(function(){});
+    };
+    window.agentEnable = function(){
+      var btn=document.getElementById("agent-enable-btn");if(btn){btn.disabled=true;btn.textContent="Connecting\u2026";}
+      fetch(_basePath+"api/agent/enable",{method:"POST"}).then(function(r){return r.json();}).then(function(d){
+        if(d.ok)location.reload();else{alert(d.error||"Failed to enable agent");if(btn){btn.disabled=false;btn.textContent="Enable Agent";}}
+      }).catch(function(){alert("Network error");if(btn){btn.disabled=false;btn.textContent="Enable Agent";}});
+    };
+    window.agentDisable = function(){
+      if(!confirm("Disable agent relay?"))return;
+      fetch(_basePath+"api/agent/disable",{method:"POST"}).then(function(r){return r.json();}).then(function(d){
+        if(d.ok)location.reload();else alert(d.error||"Failed to disable agent");
+      }).catch(function(){alert("Network error");});
     };
     window.toggleAddPeer = function(){var f=document.getElementById("vpn-add-form");if(f)f.style.display=f.style.display==="none"?"":"none";};
     window.vpnEnable = function(){
