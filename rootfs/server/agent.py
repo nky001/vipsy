@@ -18,6 +18,7 @@ AGENT_ENABLED_FILE = Path("/data/agent_enabled")
 
 VPS_HOST = os.environ.get("AGENT_VPS_HOST", "")
 VPS_AGENT_PORT = int(os.environ.get("AGENT_VPS_PORT", "443"))
+_DEFAULT_VPS_HOST = "vipsy-vps.niti.life"
 LOCAL_RELAY_PORT = int(os.environ.get("AGENT_LOCAL_PORT", "51822"))
 
 PING_INTERVAL = 15
@@ -85,10 +86,11 @@ def _get_vps_host():
             ep = cfg.get("vps_endpoint", "")
             if ep and ":" in ep:
                 return ep.split(":")[0]
-            return ep
+            if ep:
+                return ep
     except Exception:
         pass
-    return ""
+    return _DEFAULT_VPS_HOST
 
 
 def _save_state(state: dict):
