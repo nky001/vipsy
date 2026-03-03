@@ -418,6 +418,7 @@ async def _agent_loop():
                 "type": "auth",
                 "instance_id": instance_id,
                 "version": "1.0",
+                "token": token,
             }))
 
             ping_task = asyncio.ensure_future(_ping_loop(_client))
