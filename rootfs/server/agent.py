@@ -411,15 +411,17 @@ async def _agent_loop():
             _stats["connected"] = True
             _connect_time = time.monotonic()
             attempt = 0
-            _log.info("agent connected")
+            _log.info("agent connected, sending auth frame")
 
             from agent_protocol import make_ctrl
-            await _client.send_raw(make_ctrl({
+            auth_payload = {
                 "type": "auth",
                 "instance_id": instance_id,
                 "version": "1.0",
                 "token": token,
-            }))
+            }
+            await _client.send_raw(make_ctrl(auth_payload))
+            _log.info("auth frame sent (%d bytes token)", len(token))
 
             ping_task = asyncio.ensure_future(_ping_loop(_client))
             recv_task = asyncio.ensure_future(_recv_loop(_client))
@@ -436,7 +438,7 @@ async def _agent_loop():
                     pass
 
         except Exception as e:
-            _log.warning("agent connection error: %s", e)
+            _log.warning("agent connection error: %s %s", type(e).__name__, e)
 
         _healthy = False
         _stats["connected"] = False
@@ -467,7 +469,14 @@ async def _recv_loop(client: AgentClient):
             reader.feed(data)
             for stream_id, frame_type, flags, payload in reader.pop_frames():
                 await client.handle_incoming_frame(stream_id, frame_type, flags, payload)
-        except Exception:
+        except Exception as e:
+            import websockets.exceptions
+            if isinstance(e, websockets.exceptions.ConnectionClosedError):
+                _log.warning("server closed connection: code=%s reason=%s", e.rcvd.code if e.rcvd else "?", e.rcvd.reason if e.rcvd else "?")
+            elif isinstance(e, websockets.exceptions.ConnectionClosedOK):
+                _log.info("connection closed normally")
+            else:
+                _log.warning("recv error: %s %s", type(e).__name__, e)
             return
 
 
