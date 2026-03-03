@@ -524,31 +524,48 @@ async def _local_relay_server():
             except Exception:
                 pass
 
-    server = await asyncio.start_server(
-        handle_client, "127.0.0.1", LOCAL_RELAY_PORT
-    )
+    try:
+        server = await asyncio.start_server(
+            handle_client, "127.0.0.1", LOCAL_RELAY_PORT, reuse_address=True
+        )
+    except OSError as e:
+        _log.warning("local relay could not bind port %d: %s", LOCAL_RELAY_PORT, e)
+        return
     _log.info("local relay listening on 127.0.0.1:%d", LOCAL_RELAY_PORT)
     async with server:
         await server.serve_forever()
 
 
 async def _run_agent():
-    agent_task = asyncio.ensure_future(_agent_loop())
     relay_task = asyncio.ensure_future(_local_relay_server())
-    await asyncio.gather(agent_task, relay_task)
+    try:
+        await _agent_loop()
+    finally:
+        relay_task.cancel()
+        try:
+            await relay_task
+        except (asyncio.CancelledError, Exception):
+            pass
 
 
 def _loop_entry():
     global _event_loop
-    _event_loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(_event_loop)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    _event_loop = loop
     try:
-        _event_loop.run_until_complete(_run_agent())
+        loop.run_until_complete(_run_agent())
     except Exception:
         pass
     finally:
-        if _event_loop:
-            _event_loop.close()
+        try:
+            pending = asyncio.all_tasks(loop)
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        except Exception:
+            pass
+        loop.close()
+        _event_loop = None
 
 
 def is_enabled():

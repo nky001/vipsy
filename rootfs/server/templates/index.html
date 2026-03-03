@@ -634,13 +634,13 @@
     window.agentEnable = function(){
       var btn=document.getElementById("agent-enable-btn");if(btn){btn.disabled=true;btn.textContent="Connecting\u2026";}
       fetch(_basePath+"api/agent/enable",{method:"POST"}).then(function(r){return r.json();}).then(function(d){
-        if(d.ok)location.reload();else{alert(d.error||"Failed to enable agent");if(btn){btn.disabled=false;btn.textContent="Enable Agent";}}
+        if(d.ok)setTimeout(function(){location.reload();},2000);else{alert(d.error||"Failed to enable agent");if(btn){btn.disabled=false;btn.textContent="Enable Agent";}}
       }).catch(function(){alert("Network error");if(btn){btn.disabled=false;btn.textContent="Enable Agent";}});
     };
     window.agentDisable = function(){
       if(!confirm("Disable agent relay?"))return;
       fetch(_basePath+"api/agent/disable",{method:"POST"}).then(function(r){return r.json();}).then(function(d){
-        if(d.ok)location.reload();else alert(d.error||"Failed to disable agent");
+        if(d.ok)setTimeout(function(){location.reload();},1000);else alert(d.error||"Failed to disable agent");
       }).catch(function(){alert("Network error");});
     };
     window.toggleAddPeer = function(){var f=document.getElementById("vpn-add-form");if(f)f.style.display=f.style.display==="none"?"":"none";};
