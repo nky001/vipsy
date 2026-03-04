@@ -49,13 +49,6 @@ _connect_time: float = 0
 
 
 def _get_bearer_token():
-    try:
-        if AUTH_TOKEN_PATH.exists():
-            tok = AUTH_TOKEN_PATH.read_text().strip()
-            if tok:
-                return tok
-    except Exception:
-        pass
     return os.environ.get("VIPSY_SERVICE_KEY", "")
 
 
