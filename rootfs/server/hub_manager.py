@@ -396,6 +396,14 @@ def enable():
         prefix = ipaddress.IPv4Network(subnet, strict=False).prefixlen
         vps_endpoint = cfg["vps_endpoint"]
         vps_pubkey = cfg["vps_pubkey"]
+        relay_endpoint = None
+        try:
+            import agent as _agent_mod
+            if _agent_mod.status().get("healthy"):
+                relay_endpoint = f"127.0.0.1:{_agent_mod.LOCAL_RELAY_PORT}"
+        except Exception:
+            pass
+        effective_endpoint = relay_endpoint or vps_endpoint
         try:
             _run(["ip", "link", "add", "dev", HUB_INTERFACE, "type", "wireguard"])
             _run(["ip", "address", "add", "dev", HUB_INTERFACE, f"{vpn_ip}/{prefix}"])
@@ -406,7 +414,7 @@ def enable():
             if proc.returncode != 0:
                 raise RuntimeError(f"wg set failed: {proc.stderr}")
             _run(["wg", "set", HUB_INTERFACE, "peer", vps_pubkey,
-                  "endpoint", vps_endpoint,
+                  "endpoint", effective_endpoint,
                   "allowed-ips", subnet,
                   "persistent-keepalive", "25"])
             _run(["ip", "link", "set", "up", "dev", HUB_INTERFACE])
@@ -466,6 +474,26 @@ def startup_reconnect():
         print(f"[vipsy.hub] startup_reconnect OK: {result.get('message')}", flush=True)
     else:
         print(f"[vipsy.hub] startup_reconnect FAILED: {result.get('error')}", flush=True)
+
+
+def switch_endpoint(endpoint_str):
+    with _lock:
+        if not _interface_exists():
+            return False
+        cfg = _load_hub_config()
+        if not cfg:
+            return False
+        vps_pubkey = cfg.get("vps_pubkey")
+        if not vps_pubkey:
+            return False
+        try:
+            _run(["wg", "set", HUB_INTERFACE, "peer", vps_pubkey,
+                  "endpoint", endpoint_str])
+            _log.info("hub endpoint switched to %s", endpoint_str)
+            return True
+        except RuntimeError as e:
+            _log.warning("hub endpoint switch failed: %s", e)
+            return False
 
 
 def status():

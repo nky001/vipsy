@@ -20,12 +20,13 @@ VPS_HOST = os.environ.get("AGENT_VPS_HOST", "")
 VPS_AGENT_PORT = int(os.environ.get("AGENT_VPS_PORT", "8443"))
 _DEFAULT_VPS_HOST = "vipsy-vps.niti.life"
 LOCAL_RELAY_PORT = int(os.environ.get("AGENT_LOCAL_PORT", "51822"))
+WG0_VPS_PORT = 51820
 
 PING_INTERVAL = 15
 RECONNECT_BASE = 2
 RECONNECT_MAX = 120
 MAX_STREAMS = 256
-MAX_UDP_PER_SECOND = 200
+MAX_UDP_PER_SECOND = 1000
 STREAM_QUEUE_SIZE = 64
 
 _lock = threading.Lock()
@@ -46,6 +47,36 @@ _stats = {
     "uptime_seconds": 0,
 }
 _connect_time: float = 0
+
+
+class _UdpRelayProtocol(asyncio.DatagramProtocol):
+    def __init__(self):
+        self.transport = None
+        self._wg_source = None
+
+    def connection_made(self, transport):
+        self.transport = transport
+        _log.info("udp relay ready on 127.0.0.1:%d", LOCAL_RELAY_PORT)
+
+    def datagram_received(self, data, addr):
+        self._wg_source = addr
+        if _client and _client._connected:
+            asyncio.ensure_future(
+                _client.send_udp(0, "127.0.0.1", WG0_VPS_PORT, data)
+            )
+
+    def deliver(self, data):
+        if self._wg_source and self.transport:
+            self.transport.sendto(data, self._wg_source)
+
+    def error_received(self, exc):
+        pass
+
+    def connection_lost(self, exc):
+        pass
+
+
+_udp_relay: _UdpRelayProtocol | None = None
 
 
 def _get_bearer_token():
@@ -227,6 +258,8 @@ class AgentClient:
         if frame_type == FrameType.CTRL:
             ctrl = parse_ctrl(payload)
             _log.info("ctrl from VPS: %s", ctrl)
+            if ctrl.get("type") == "auth_ok":
+                _try_switch_hub_to_relay()
             return
         if frame_type == FrameType.STREAM_OPEN:
             meta = parse_stream_open(payload)
@@ -366,6 +399,12 @@ class AgentClient:
             _stats["streams_active"] = len(self._streams)
 
     async def _deliver_udp(self, dst_ip: str, dst_port: int, data: bytes):
+        global _udp_relay
+        if _udp_relay:
+            if _udp_relay._wg_source:
+                _udp_relay.deliver(data)
+                _stats["udp_relayed"] += 1
+            return
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.setblocking(False)
@@ -376,6 +415,27 @@ class AgentClient:
 
 
 _client: AgentClient | None = None
+
+
+def _try_switch_hub_to_relay():
+    try:
+        import hub_manager
+        if hub_manager._interface_exists():
+            hub_manager.switch_endpoint(f"127.0.0.1:{LOCAL_RELAY_PORT}")
+    except Exception as e:
+        _log.debug("hub switch to relay: %s", e)
+
+
+def _try_switch_hub_to_direct():
+    try:
+        import hub_manager
+        cfg = hub_manager._load_hub_config()
+        if cfg and hub_manager._interface_exists():
+            ep = cfg.get("vps_endpoint")
+            if ep:
+                hub_manager.switch_endpoint(ep)
+    except Exception as e:
+        _log.debug("hub switch to direct: %s", e)
 
 
 async def _agent_loop():
@@ -437,6 +497,7 @@ async def _agent_loop():
         _stats["connected"] = False
         _stats["reconnects"] += 1
         await _client.disconnect()
+        _try_switch_hub_to_direct()
 
         delay = min(RECONNECT_MAX, RECONNECT_BASE * (2 ** min(attempt, 6)))
         _log.info("reconnecting in %ds (attempt %d)", delay, attempt + 1)
@@ -540,10 +601,23 @@ async def _local_relay_server():
 
 
 async def _run_agent():
+    global _udp_relay
     relay_task = asyncio.ensure_future(_local_relay_server())
+    udp_transport = None
+    try:
+        loop = asyncio.get_event_loop()
+        udp_transport, _udp_relay = await loop.create_datagram_endpoint(
+            _UdpRelayProtocol,
+            local_addr=("127.0.0.1", LOCAL_RELAY_PORT)
+        )
+    except OSError as e:
+        _log.warning("udp relay could not bind port %d: %s", LOCAL_RELAY_PORT, e)
     try:
         await _agent_loop()
     finally:
+        if udp_transport:
+            udp_transport.close()
+        _udp_relay = None
         relay_task.cancel()
         try:
             await relay_task
