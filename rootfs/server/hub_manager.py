@@ -399,7 +399,8 @@ def enable():
         relay_endpoint = None
         try:
             import agent as _agent_mod
-            if _agent_mod.status().get("healthy"):
+            s = _agent_mod.status()
+            if s.get("healthy") and s.get("udp_relay_active"):
                 relay_endpoint = f"127.0.0.1:{_agent_mod.LOCAL_RELAY_PORT}"
         except Exception:
             pass
@@ -514,7 +515,8 @@ def status():
     agent_available = False
     try:
         import agent as _agent_mod
-        agent_available = _agent_mod.status().get("healthy", False)
+        s = _agent_mod.status()
+        agent_available = s.get("healthy", False) and s.get("udp_relay_active", False)
     except Exception:
         pass
     return {

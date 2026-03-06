@@ -418,12 +418,15 @@ _client: AgentClient | None = None
 
 
 def _try_switch_hub_to_relay():
+    if not _udp_relay or not _udp_relay.transport:
+        _log.info("hub switch to relay skipped: udp relay not active")
+        return
     try:
         import hub_manager
         if hub_manager._interface_exists():
             hub_manager.switch_endpoint(f"127.0.0.1:{LOCAL_RELAY_PORT}")
     except Exception as e:
-        _log.debug("hub switch to relay: %s", e)
+        _log.info("hub switch to relay failed: %s", e)
 
 
 def _try_switch_hub_to_direct():
@@ -435,7 +438,21 @@ def _try_switch_hub_to_direct():
             if ep:
                 hub_manager.switch_endpoint(ep)
     except Exception as e:
-        _log.debug("hub switch to direct: %s", e)
+        _log.info("hub switch to direct failed: %s", e)
+
+
+def _get_hub_wg_port():
+    try:
+        import hub_manager
+        cfg = hub_manager._load_hub_config()
+        if cfg:
+            ep = cfg.get("vps_endpoint", "")
+            parts = ep.rsplit(":", 1)
+            if len(parts) == 2 and parts[1].isdigit():
+                return int(parts[1])
+    except Exception:
+        pass
+    return WG0_VPS_PORT
 
 
 async def _agent_loop():
@@ -472,9 +489,10 @@ async def _agent_loop():
                 "instance_id": instance_id,
                 "version": "1.0",
                 "token": token,
+                "wg_port": _get_hub_wg_port(),
             }
             await _client.send_raw(make_ctrl(auth_payload))
-            _log.info("auth frame sent (%d bytes token)", len(token))
+            _log.info("auth frame sent (%d bytes token, wg_port=%d)", len(token), auth_payload["wg_port"])
 
             ping_task = asyncio.ensure_future(_ping_loop(_client))
             recv_task = asyncio.ensure_future(_recv_loop(_client))
@@ -699,6 +717,7 @@ def status():
         "running": _running and _loop_thread is not None and _loop_thread.is_alive() if _loop_thread else False,
         "healthy": _healthy,
         "connected": _stats.get("connected", False),
+        "udp_relay_active": _udp_relay is not None and _udp_relay.transport is not None,
         "reconnects": _stats.get("reconnects", 0),
         "streams_active": _stats.get("streams_active", 0),
         "streams_total": _stats.get("streams_opened", 0),
