@@ -28,7 +28,7 @@ import hub_manager
 import agent
 
 OPTIONS_PATH = os.environ.get("OPTIONS_PATH", "/data/options.json")
-INGRESS_PORT = int(os.environ.get("INGRESS_PORT", 8099))
+INGRESS_PORT = int(os.environ.get("INGRESS_PORT", 18099))
 HA_CORE_HOST = os.environ.get("HA_CORE_HOST", "homeassistant")
 HA_CORE_PORT = int(os.environ.get("HA_CORE_PORT", 8123))
 HTTPS_HOST_PORT = int(os.environ.get("HTTPS_HOST_PORT", 443))

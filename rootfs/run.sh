@@ -200,5 +200,5 @@ caddy run --config /caddy/Caddyfile --adapter caddyfile &
 echo "[vipsy] agent startup reconnect"
 python3 -c "import sys; sys.path.insert(0, '/server'); import agent; agent.startup_reconnect()" 2>/dev/null || echo "[vipsy] agent reconnect skipped"
 
-echo "[vipsy] starting gateway on :8099"
+echo "[vipsy] starting gateway on :18099"
 exec python3 /server/gateway.py
