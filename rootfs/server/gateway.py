@@ -675,7 +675,7 @@ def _index_context(**extra):
         agent=agent.status(),
         now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         ingress_entry=INGRESS_ENTRY,
-        version=options.get("_version", "2.8.3"),
+        version=options.get("_version", "2.8.4"),
         logged_in=bool(auth_token),
         backend_available=bool(BACKEND_URL),
         backend_url=BACKEND_URL,
@@ -688,4 +688,32 @@ def _index_context(**extra):
 if __name__ == "__main__":
     tunnel_manager.start()
     hub_manager.startup_reconnect()
+
+    for _attempt in range(10):
+        try:
+            _s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            _s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            _s.bind(("0.0.0.0", INGRESS_PORT))
+            _s.close()
+            break
+        except OSError:
+            _s.close()
+            if _attempt == 0:
+                logging.warning("port %d busy, waiting for release...", INGRESS_PORT)
+            time.sleep(1)
+    else:
+        _who = ""
+        try:
+            _r = subprocess.run(
+                ["ss", "-tlnpH", f"sport = :{INGRESS_PORT}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            _who = _r.stdout.strip()
+        except Exception:
+            pass
+        logging.error(
+            "port %d still in use after waiting 10 s. holder: %s",
+            INGRESS_PORT, _who or "unknown",
+        )
+
     app.run(host="0.0.0.0", port=INGRESS_PORT)
