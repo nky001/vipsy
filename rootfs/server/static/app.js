@@ -247,17 +247,59 @@
       .catch(function () {});
   }
 
+  function refreshDns() {
+    var st = document.getElementById("dns-status-text");
+    if (!st) return;
+    fetch(basePath + "api/dns")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        setText("dns-status-text", d.running ? "Running" : "Stopped");
+        setText("dns-hostname-current", d.hostname || "\u2014");
+        setText("dns-local-ip", d.local_ip || "\u2014");
+        setText("dns-stats", "q=" + d.queries + " local=" + d.local_answers + " up=" + d.upstream_answers + " fail=" + d.upstream_failures);
+      })
+      .catch(function () {});
+  }
+
   refreshStatus();
   refreshAccess();
   refreshTunnel();
   refreshAuth();
+  refreshDns();
 
   setInterval(function () {
     refreshStatus();
     refreshAccess();
+    refreshDns();
   }, POLL_MS);
 
   setInterval(refreshAuth, 60000);
+
+  window.saveDnsConfig = function () {
+    var enabled = !!(document.getElementById("dns-enabled") || {}).checked;
+    var hostname = ((document.getElementById("dns-hostname") || {}).value || "").trim();
+    var upstream = ((document.getElementById("dns-upstream") || {}).value || "1.1.1.1").trim();
+    var ttl = parseInt(((document.getElementById("dns-ttl") || {}).value || "30"), 10);
+    fetch(basePath + "api/dns", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        enabled: enabled,
+        hostname: hostname,
+        upstream: upstream,
+        ttl: ttl
+      })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) {
+          alert(d.error || "Failed to save DNS settings");
+          return;
+        }
+        refreshDns();
+      })
+      .catch(function () { alert("Network error"); });
+  };
 
   function refreshVpn() {
     fetch(basePath + "api/vpn")

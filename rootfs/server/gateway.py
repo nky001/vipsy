@@ -26,6 +26,7 @@ import tunnel_manager
 import vpn_manager
 import hub_manager
 import agent
+import dns_manager
 
 OPTIONS_PATH = os.environ.get("OPTIONS_PATH", "/data/options.json")
 INGRESS_PORT = int(os.environ.get("INGRESS_PORT", 18099))
@@ -42,6 +43,13 @@ def load_options():
         with p.open("r", encoding="utf-8") as f:
             return json.load(f)
     return {}
+
+
+def save_options(data):
+    p = Path(OPTIONS_PATH)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("w", encoding="utf-8") as f:
+        json.dump(data, f)
 
 
 def _service_running(name):
@@ -274,6 +282,46 @@ def status():
 def access():
     domain = options.get("domain", "")
     return jsonify(_build_access_info(domain))
+
+
+@app.route("/api/dns")
+def dns_status():
+    return jsonify(dns_manager.status())
+
+
+@app.route("/api/dns", methods=["POST"])
+def dns_configure():
+    global options
+    body = request.get_json(silent=True) or {}
+    enabled = bool(body.get("enabled", False))
+    hostname = (body.get("hostname", "") or "").strip().lower().rstrip(".")
+    upstream = (body.get("upstream", "1.1.1.1") or "1.1.1.1").strip()
+    ttl = body.get("ttl", 30)
+
+    if enabled and not re.match(r"^[a-z0-9][a-z0-9.-]*[a-z0-9]$", hostname):
+        return jsonify(ok=False, error="Invalid hostname"), 400
+    try:
+        ttl = int(ttl)
+    except Exception:
+        return jsonify(ok=False, error="Invalid TTL"), 400
+    if ttl < 1 or ttl > 3600:
+        return jsonify(ok=False, error="TTL must be 1-3600"), 400
+
+    options["smart_dns_enabled"] = enabled
+    options["smart_dns_hostname"] = hostname
+    options["smart_dns_upstream"] = upstream
+    options["smart_dns_ttl"] = ttl
+    save_options(options)
+
+    state = dns_manager.apply_config(
+        enabled=enabled,
+        hostname=hostname,
+        local_ip=_get_host_ip() or "",
+        upstream=upstream,
+        ttl=ttl,
+        port=53,
+    )
+    return jsonify(ok=True, data=state)
 
 
 @app.route("/api/tunnel")
@@ -673,6 +721,7 @@ def _index_context(**extra):
         hub=hub_manager.status(),
         hub_peers=_hub_peers_for_template(),
         agent=agent.status(),
+        dns=dns_manager.status(),
         now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         ingress_entry=INGRESS_ENTRY,
         version=options.get("_version", "2.8.4"),
@@ -688,6 +737,14 @@ def _index_context(**extra):
 if __name__ == "__main__":
     tunnel_manager.start()
     hub_manager.startup_reconnect()
+    dns_manager.apply_config(
+        enabled=bool(options.get("smart_dns_enabled", False)),
+        hostname=options.get("smart_dns_hostname", ""),
+        local_ip=_get_host_ip() or "",
+        upstream=options.get("smart_dns_upstream", "1.1.1.1"),
+        ttl=int(options.get("smart_dns_ttl", 30) or 30),
+        port=53,
+    )
 
     for _attempt in range(10):
         try:
