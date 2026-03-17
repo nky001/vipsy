@@ -250,11 +250,11 @@
       </div>
       <div class="form-group" style="margin-top:.75rem">
         <label for="dns-hostname">Tunnel Hostname</label>
-        <input type="text" id="dns-hostname" class="form-input" value="{{ dns.hostname or '' }}" placeholder="example.vipsy.example.com">
+        <input type="text" id="dns-hostname" class="form-input" value="{{ dns.hostname or dns_hostname_default or '' }}" placeholder="{{ dns_hostname_default or 'example.vipsy.example.com' }}">
       </div>
       <div class="form-group">
         <label for="dns-upstream">Upstream DNS</label>
-        <input type="text" id="dns-upstream" class="form-input" value="{{ dns.upstream or '1.1.1.1' }}" placeholder="1.1.1.1">
+        <input type="text" id="dns-upstream" class="form-input" value="{{ dns.upstream or dns_upstream_default or '1.1.1.1' }}" placeholder="{{ dns_upstream_default or '1.1.1.1' }}">
       </div>
       <div class="form-group">
         <label for="dns-ttl">TTL (seconds)</label>
@@ -268,7 +268,7 @@
         <button class="btn btn--sm btn--blue" onclick="saveDnsConfig()">Save DNS Settings</button>
       </div>
       <div class="access-card__hint access-card__hint--info" style="margin-top:.75rem">
-        Set your Wi-Fi DNS server to this HA host IP to use Smart DNS fallback for the configured tunnel hostname.
+        Vipsy auto-detects the tunnel hostname and LAN IP. The only external step is making clients use this resolver path, usually by setting your router DNS override to this HA host IP.
       </div>
     </div>
 

@@ -131,6 +131,85 @@ def _get_host_ip():
     return _get_local_ip()
 
 
+def _normalize_dns_hostname(value):
+    raw = (value or "").strip().lower()
+    if not raw:
+        return ""
+    if "://" in raw:
+        parsed = urllib.parse.urlparse(raw)
+        raw = parsed.netloc or parsed.path
+    raw = raw.split("/", 1)[0].strip().rstrip(".")
+    if raw.startswith("[") and raw.endswith("]"):
+        raw = raw[1:-1]
+    if ":" in raw and raw.count(":") == 1:
+        host, maybe_port = raw.rsplit(":", 1)
+        if maybe_port.isdigit():
+            raw = host
+    return raw
+
+
+def _normalize_dns_upstream(value):
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    if "://" in raw:
+        parsed = urllib.parse.urlparse(raw)
+        raw = parsed.hostname or ""
+    else:
+        raw = raw.split("/", 1)[0].strip()
+        if raw.count(":") == 1:
+            host, maybe_port = raw.rsplit(":", 1)
+            if maybe_port.isdigit():
+                raw = host
+    return raw.strip()
+
+
+def _suggest_dns_hostname():
+    explicit = _normalize_dns_hostname(options.get("smart_dns_hostname", ""))
+    if explicit:
+        return explicit
+    tunnel = tunnel_manager.status()
+    hostname = _normalize_dns_hostname(tunnel.get("hostname"))
+    if hostname:
+        return hostname
+    tunnel_url = _normalize_dns_hostname(tunnel.get("url"))
+    if tunnel_url:
+        return tunnel_url
+    domain = _normalize_dns_hostname(options.get("domain", ""))
+    if domain:
+        return domain
+    return ""
+
+
+def _suggest_dns_upstream():
+    explicit = _normalize_dns_upstream(options.get("smart_dns_upstream", ""))
+    if explicit:
+        return explicit
+    try:
+        resolv = Path("/etc/resolv.conf")
+        if resolv.exists():
+            for line in resolv.read_text(encoding="utf-8", errors="ignore").splitlines():
+                line = line.strip()
+                if not line.startswith("nameserver "):
+                    continue
+                candidate = _normalize_dns_upstream(line.split(None, 1)[1])
+                if candidate and candidate not in {"127.0.0.1", "::1"}:
+                    return candidate
+    except Exception:
+        pass
+    return "1.1.1.1"
+
+
+def _validate_dns_upstream(value):
+    if not value:
+        return False
+    if re.match(r"^[a-zA-Z0-9.-]+$", value):
+        return True
+    if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", value):
+        return True
+    return False
+
+
 _access_cache: dict = {}
 _ACCESS_TTL = 60
 
@@ -294,12 +373,14 @@ def dns_configure():
     global options
     body = request.get_json(silent=True) or {}
     enabled = bool(body.get("enabled", False))
-    hostname = (body.get("hostname", "") or "").strip().lower().rstrip(".")
-    upstream = (body.get("upstream", "1.1.1.1") or "1.1.1.1").strip()
+    hostname = _normalize_dns_hostname(body.get("hostname", "")) or _suggest_dns_hostname()
+    upstream = _normalize_dns_upstream(body.get("upstream", "")) or _suggest_dns_upstream()
     ttl = body.get("ttl", 30)
 
     if enabled and not re.match(r"^[a-z0-9][a-z0-9.-]*[a-z0-9]$", hostname):
         return jsonify(ok=False, error="Invalid hostname"), 400
+    if not _validate_dns_upstream(upstream):
+        return jsonify(ok=False, error="Invalid upstream DNS server"), 400
     try:
         ttl = int(ttl)
     except Exception:
@@ -722,6 +803,8 @@ def _index_context(**extra):
         hub_peers=_hub_peers_for_template(),
         agent=agent.status(),
         dns=dns_manager.status(),
+        dns_hostname_default=_suggest_dns_hostname(),
+        dns_upstream_default=_suggest_dns_upstream(),
         now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         ingress_entry=INGRESS_ENTRY,
         version=options.get("_version", "2.8.4"),
@@ -739,9 +822,9 @@ if __name__ == "__main__":
     hub_manager.startup_reconnect()
     dns_manager.apply_config(
         enabled=bool(options.get("smart_dns_enabled", False)),
-        hostname=options.get("smart_dns_hostname", ""),
+        hostname=_suggest_dns_hostname(),
         local_ip=_get_host_ip() or "",
-        upstream=options.get("smart_dns_upstream", "1.1.1.1"),
+        upstream=_suggest_dns_upstream(),
         ttl=int(options.get("smart_dns_ttl", 30) or 30),
         port=53,
     )
