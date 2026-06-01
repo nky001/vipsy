@@ -113,6 +113,32 @@ def test_hub_identity_pins_tunnel_uid_only_for_first_wireguard_setup(tmp_path):
     assert wireguard_id.read_text() == "newtunl2"
 
 
+def test_hub_endpoint_replaces_legacy_vps_domain_without_changing_port():
+    assert hub_manager._normalize_vps_endpoint("vipsy-vps.niti.life:51830") == "vipsy-vps.vipsy.in:51830"
+    assert hub_manager._normalize_vps_endpoint("vipsy-vps.vipsy.in:51830") == "vipsy-vps.vipsy.in:51830"
+
+
+def test_hub_config_load_migrates_cached_legacy_vps_domain(tmp_path):
+    config_path = tmp_path / "hub-config.json"
+    config_path.write_text('{"vps_endpoint":"vipsy-vps.niti.life:51830","subnet":"10.100.10.0/24"}')
+
+    with patch.object(hub_manager, "HUB_CONFIG_FILE", str(config_path)):
+        cfg = hub_manager._load_hub_config()
+
+    assert cfg["vps_endpoint"] == "vipsy-vps.vipsy.in:51830"
+    assert "vipsy-vps.vipsy.in:51830" in config_path.read_text()
+    assert "niti.life" not in config_path.read_text()
+
+
+def test_hub_client_config_download_migrates_cached_legacy_vps_domain():
+    config = "[Peer]\nEndpoint = vipsy-vps.niti.life:51830\nAllowedIPs = 10.100.10.0/24\n"
+
+    sanitized = hub_manager._sanitize_client_config(config)
+
+    assert "Endpoint = vipsy-vps.vipsy.in:51830" in sanitized
+    assert "niti.life" not in sanitized
+
+
 def test_hub_recovery_adopts_unique_legacy_lan_identity(tmp_path):
     wireguard_id = tmp_path / "wireguard-instance-id"
     peers = {

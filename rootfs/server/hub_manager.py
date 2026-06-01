@@ -35,6 +35,8 @@ HUB_BACKEND_URL = os.environ.get(
     "VIPSY_HUB_BACKEND_URL",
     "https://vipsy-backend.nitinexus.workers.dev",
 ).strip()
+LEGACY_VPS_SUFFIX = ".niti.life"
+MANAGED_VPS_SUFFIX = ".vipsy.in"
 AUTH_TOKEN_PATH = Path("/data/auth_token")
 
 _lock = threading.Lock()
@@ -122,11 +124,26 @@ def _save_client_peers(peers_map):
     p.chmod(0o600)
 
 
+def _normalize_vps_endpoint(endpoint):
+    value = (endpoint or "").strip()
+    host, sep, port = value.rpartition(":")
+    if not sep or not port.isdigit():
+        return value
+    if host.endswith(LEGACY_VPS_SUFFIX):
+        host = host[:-len(LEGACY_VPS_SUFFIX)] + MANAGED_VPS_SUFFIX
+    return f"{host}:{port}"
+
+
 def _load_hub_config():
     try:
         cfg_path = Path(HUB_CONFIG_FILE)
         if cfg_path.exists():
-            return json.loads(cfg_path.read_text())
+            cfg = json.loads(cfg_path.read_text())
+            endpoint = _normalize_vps_endpoint(cfg.get("vps_endpoint"))
+            if endpoint != cfg.get("vps_endpoint"):
+                cfg["vps_endpoint"] = endpoint
+                _save_hub_config(cfg)
+            return cfg
     except Exception:
         pass
     return None
@@ -134,6 +151,7 @@ def _load_hub_config():
 
 def _save_hub_config(cfg):
     _data_dir()
+    cfg = {**cfg, "vps_endpoint": _normalize_vps_endpoint(cfg.get("vps_endpoint"))}
     p = Path(HUB_CONFIG_FILE)
     p.write_text(json.dumps(cfg, indent=2))
     p.chmod(0o600)
@@ -386,7 +404,7 @@ def _register():
         "vpn_ip": data["peer"]["vpn_ip"],
         "pubkey": data["peer"]["pubkey"],
         "lan_subnet": lan_subnet,
-        "vps_endpoint": data["config"]["vps_endpoint"],
+        "vps_endpoint": _normalize_vps_endpoint(data["config"]["vps_endpoint"]),
         "vps_pubkey": data["config"]["vps_pubkey"],
         "subnet": data["config"]["subnet"],
         "server_ip": data["config"]["server_ip"],
@@ -525,6 +543,7 @@ def switch_endpoint(endpoint_str):
         if not vps_pubkey:
             return False
         try:
+            endpoint_str = _normalize_vps_endpoint(endpoint_str)
             _run(["wg", "set", HUB_INTERFACE, "peer", vps_pubkey,
                   "endpoint", endpoint_str])
             _log.info("hub endpoint switched to %s", endpoint_str)
@@ -614,7 +633,7 @@ def _generate_client_config(peer_data, privkey, hub_cfg):
     subnet = hub_cfg["subnet"]
     prefix = ipaddress.IPv4Network(subnet, strict=False).prefixlen
     lan_subnet = hub_cfg.get("lan_subnet", "192.168.1.0/24")
-    vps_endpoint = hub_cfg["vps_endpoint"]
+    vps_endpoint = _normalize_vps_endpoint(hub_cfg["vps_endpoint"])
     vps_pubkey = hub_cfg["vps_pubkey"]
     allowed_ips = f"{subnet}, {lan_subnet}"
     lines = [
@@ -637,6 +656,9 @@ def _sanitize_client_config(config_text):
         stripped = line.strip()
         if stripped.startswith("DNS ="):
             continue
+        if stripped.startswith("Endpoint ="):
+            _, value = stripped.split("=", 1)
+            line = "Endpoint = " + _normalize_vps_endpoint(value)
         if stripped.startswith("AllowedIPs ="):
             _, value = stripped.split("=", 1)
             parts = [p.strip() for p in value.split(",") if p.strip() and p.strip() not in {"1.1.1.1/32", "1.0.0.1/32", "8.8.8.8/32"}]
