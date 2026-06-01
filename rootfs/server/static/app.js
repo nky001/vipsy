@@ -321,7 +321,7 @@
           return;
         }
         setText("instance-current", d.instance_name || "not set");
-        if (d.tunnel_recreated) schedTunnel(true);
+        window.INSTANCE_LABEL = d.instance_name || window.INSTANCE_ID || "instance";
       })
       .catch(function () {
         if (btn) { btn.disabled = false; btn.textContent = "Save Name"; }

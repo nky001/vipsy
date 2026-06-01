@@ -73,7 +73,7 @@
         <button class="btn btn--sm btn--blue" id="instance-save-btn" onclick="saveInstanceName()">Save Name</button>
       </div>
       <div class="access-card__hint access-card__hint--info" style="margin-top:.75rem">
-        Managed tunnel hostnames use <strong>{{ tunnel.managed_domain or 'vipsy.in' }}</strong>. Older managed hostnames are replaced safely on the next tunnel start after the new DNS record succeeds.
+        Friendly names label WireGuard downloads only. Your managed tunnel hostname stays unchanged.
       </div>
     </div>
 
@@ -657,6 +657,7 @@
     var LOGGED_IN = {{ 'true' if logged_in else 'false' }};
     var BACKEND_URL = "{{ backend_url }}";
     var INSTANCE_ID = "{{ instance_id }}";
+    var INSTANCE_LABEL = "{{ instance_name or instance_id }}";
     var _basePath = (INGRESS_ENTRY || "").replace(/\/$/, "") + "/";
     function _esc(s){var d=document.createElement("div");d.appendChild(document.createTextNode(s||""));return d.innerHTML;}
     window.toggleHubAddPeer = function(){var f=document.getElementById("hub-add-form");if(f)f.style.display=f.style.display==="none"?"":"none";};
@@ -670,7 +671,7 @@
           document.getElementById("hub-add-form").style.display="none";
           var result=document.getElementById("hub-peer-result");if(result)result.style.display="";
           var cfg=document.getElementById("hub-peer-config-text");if(cfg)cfg.textContent=d.config||"";
-          var dl=document.getElementById("hub-peer-dl-link");if(dl&&d.peer){dl.href=_basePath+"api/hub/peers/"+d.peer.peer_id+"/config";dl.download="vipsy-remote-"+d.peer.peer_id+".conf";}
+          var dl=document.getElementById("hub-peer-dl-link");if(dl&&d.peer){dl.href=_basePath+"api/hub/peers/"+d.peer.peer_id+"/config";dl.download="vipsy-"+INSTANCE_LABEL+"-"+d.peer.peer_id+"-remote.conf";}
           var qrl=document.getElementById("hub-peer-qr-link");if(qrl&&d.peer)qrl.href=_basePath+"api/hub/peers/"+d.peer.peer_id+"/qr";
           var qri=document.getElementById("hub-peer-qr-img");if(qri&&d.peer)qri.innerHTML='<img src="'+_basePath+"api/hub/peers/"+d.peer.peer_id+'/qr" alt="QR" style="max-width:220px;margin-top:.5rem">';
           if(window.refreshHubPeers)refreshHubPeers();

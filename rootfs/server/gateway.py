@@ -66,6 +66,18 @@ def _normalize_instance_name(value):
     return name
 
 
+def _download_slug():
+    name = _normalize_instance_name(options.get("instance_name", ""))
+    if name:
+        return name
+    uid = tunnel_manager.get_unique_id() or "instance"
+    return re.sub(r"[^a-z0-9-]+", "-", uid.lower()).strip("-") or "instance"
+
+
+def _download_filename(peer_id, network, extension="conf"):
+    return f"vipsy-{_download_slug()}-{peer_id}-{network}.{extension}"
+
+
 def _service_running(name):
     try:
         out = subprocess.check_output(["pgrep", "-x", name], stderr=subprocess.DEVNULL)
@@ -431,18 +443,10 @@ def instance_update():
     name = _normalize_instance_name(body.get("instance_name", ""))
     if name is None:
         return jsonify(ok=False, error="Use 3-32 lowercase letters, numbers, or dashes"), 400
-    old_name = options.get("instance_name", "")
     options["instance_name"] = name
     save_options(options)
     os.environ["INSTANCE_NAME"] = name
-    recreated = False
-    if name != old_name and tunnel_manager.is_enabled():
-        try:
-            tunnel_manager.deprovision()
-            recreated = tunnel_manager.start()
-        except Exception:
-            recreated = False
-    return jsonify(ok=True, instance_name=name, tunnel_recreated=recreated)
+    return jsonify(ok=True, instance_name=name, tunnel_recreated=False)
 
 
 @app.route("/api/diagnostics")
@@ -690,7 +694,7 @@ def vpn_peer_config(peer_id):
         return jsonify(ok=False, error="Peer not found"), 404
     from flask import Response
     return Response(config, mimetype="text/plain",
-                    headers={"Content-Disposition": f"attachment; filename=vipsy-{peer_id}-{network}.conf"})
+                    headers={"Content-Disposition": f"attachment; filename={_download_filename(peer_id, network)}"})
 
 
 @app.route("/api/vpn/peers/<peer_id>/qr")
@@ -716,7 +720,7 @@ def vpn_peer_tunnel_bundle(peer_id):
         return jsonify(ok=False, error="Tunnel URL not available yet"), 404
     from flask import Response
     return Response(bundle, mimetype="application/zip",
-                    headers={"Content-Disposition": f"attachment; filename=vipsy-{peer_id}-relay.zip"})
+                    headers={"Content-Disposition": f"attachment; filename={_download_filename(peer_id, 'relay', 'zip')}"})
 
 
 
@@ -776,7 +780,7 @@ def hub_peer_config(peer_id):
         return jsonify(ok=False, error="Config not available — re-add peer to regenerate"), 404
     from flask import Response
     return Response(cfg_text, mimetype="text/plain",
-                    headers={"Content-Disposition": f"attachment; filename=vipsy-{peer_id}.conf"})
+                    headers={"Content-Disposition": f"attachment; filename={_download_filename(peer_id, 'remote')}"})
 
 
 @app.route("/api/hub/peers/<peer_id>/qr")

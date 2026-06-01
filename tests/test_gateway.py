@@ -15,6 +15,7 @@ import hub_manager
 _hub_iface_patch = patch.object(hub_manager, "_interface_exists", return_value=False)
 _hub_iface_patch.start()
 
+import gateway
 from gateway import app
 
 
@@ -136,3 +137,33 @@ def test_status_includes_wireguard():
     assert resp.status_code == 200
     data = resp.get_json()
     assert "wireguard" in data
+
+
+def test_instance_name_save_does_not_restart_or_deprovision_tunnel():
+    with patch.dict(gateway.options, {}, clear=True):
+        with patch.dict(os.environ, {}, clear=False):
+            with patch.object(gateway, "save_options"):
+                with patch.object(gateway.tunnel_manager, "deprovision") as deprovision:
+                    with patch.object(gateway.tunnel_manager, "start") as start:
+                        resp = _client().post("/api/instance", json={"instance_name": "place1"})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["instance_name"] == "place1"
+    assert data["tunnel_recreated"] is False
+    deprovision.assert_not_called()
+    start.assert_not_called()
+
+
+def test_wireguard_downloads_use_friendly_instance_name():
+    with patch.dict(gateway.options, {"instance_name": "place1"}):
+        with patch.object(gateway.vpn_manager, "get_peer_config", return_value="[Interface]\n"):
+            vpn_resp = _client().get("/api/vpn/peers/abc12345/config?network=lan")
+        with patch.object(gateway.vpn_manager, "get_peer_tunnel_bundle", return_value=b"zip"):
+            relay_resp = _client().get("/api/vpn/peers/abc12345/tunnel-bundle")
+        with patch.object(gateway.hub_manager, "get_peer_config", return_value="[Interface]\n"):
+            hub_resp = _client().get("/api/hub/peers/abc12345/config")
+
+    assert "filename=vipsy-place1-abc12345-lan.conf" in vpn_resp.headers["Content-Disposition"]
+    assert "filename=vipsy-place1-abc12345-relay.zip" in relay_resp.headers["Content-Disposition"]
+    assert "filename=vipsy-place1-abc12345-remote.conf" in hub_resp.headers["Content-Disposition"]
