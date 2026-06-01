@@ -31,7 +31,10 @@ HUB_ENABLED_FILE = os.path.join(VPN_DATA_DIR, "hub_enabled")
 INSTANCE_ID_FILE = os.path.join(VPN_DATA_DIR, "instance_id")
 TUNNEL_UID_FILE = "/data/tunnel/uid"
 
-BACKEND_URL = os.environ.get("VIPSY_BACKEND_URL", "")
+HUB_BACKEND_URL = os.environ.get(
+    "VIPSY_HUB_BACKEND_URL",
+    "https://vipsy-backend.nitinexus.workers.dev",
+).strip()
 AUTH_TOKEN_PATH = Path("/data/auth_token")
 
 _lock = threading.Lock()
@@ -40,18 +43,10 @@ _last_enable_time: float = 0.0
 
 
 def _bearer():
-    global _auth_cache
-    if _auth_cache:
-        return _auth_cache
-    try:
-        if AUTH_TOKEN_PATH.exists():
-            tok = AUTH_TOKEN_PATH.read_text().strip()
-            if tok:
-                _auth_cache = tok
-                return tok
-    except Exception:
-        pass
-    return os.environ.get("VIPSY_SERVICE_KEY", "7ae5a1d9a1d4ecf98c2d08f23441638924c370e1686deba790f0cd3d1fc26426")
+    return os.environ.get(
+        "VIPSY_HUB_SERVICE_KEY",
+        os.environ.get("VIPSY_SERVICE_KEY", "7ae5a1d9a1d4ecf98c2d08f23441638924c370e1686deba790f0cd3d1fc26426"),
+    )
 
 
 def reload_auth_cache():
@@ -60,7 +55,7 @@ def reload_auth_cache():
 
 
 def _api(method, path, body=None):
-    url = f"{BACKEND_URL.rstrip('/')}{path}"
+    url = f"{HUB_BACKEND_URL.rstrip('/')}{path}"
     data = json.dumps(body).encode() if body else None
     req = urllib.request.Request(
         url, data=data, method=method,
@@ -145,7 +140,7 @@ def _save_hub_config(cfg):
 
 
 def _backend_available():
-    return bool(BACKEND_URL and _bearer())
+    return bool(HUB_BACKEND_URL and _bearer())
 
 
 def _interface_exists():
@@ -189,6 +184,35 @@ def _get_instance_id():
     except Exception:
         pass
     return uid
+
+
+def _save_instance_id(uid):
+    try:
+        _data_dir()
+        Path(INSTANCE_ID_FILE).write_text(uid)
+    except Exception:
+        pass
+
+
+def _recover_legacy_instance_id(current_id, pubkey, lan_subnet):
+    try:
+        resp = _api("GET", "/hub/peers")
+        peers = resp.get("data", {}).get("peers", [])
+    except Exception:
+        return current_id
+
+    homes = [p for p in peers if p.get("role") == "home" and p.get("active") is not False]
+    exact = {p.get("instance_id") for p in homes if p.get("pubkey") == pubkey and p.get("instance_id")}
+    lan_matches = {p.get("instance_id") for p in homes if p.get("lan_subnet") == lan_subnet and p.get("instance_id")}
+    matches = exact or lan_matches
+    if len(matches) != 1:
+        return current_id
+
+    recovered = next(iter(matches))
+    if recovered != current_id:
+        print(f"[vipsy.hub] adopting existing VPS-compatible home identity for LAN {lan_subnet}", flush=True)
+        _save_instance_id(recovered)
+    return recovered
 
 
 logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
@@ -345,11 +369,11 @@ def _flush_hub_nat():
 def _register():
     if not _backend_available():
         return {"ok": False, "error": "Backend not configured"}
-    instance_id = _get_instance_id()
-    if not instance_id:
-        return {"ok": False, "error": "Instance ID not set — sign in first to generate one"}
     _, pubkey = _get_or_create_hub_keys()
     lan_subnet = _get_lan_subnet()
+    instance_id = _recover_legacy_instance_id(_get_instance_id(), pubkey, lan_subnet)
+    if not instance_id:
+        return {"ok": False, "error": "Instance ID not set — sign in first to generate one"}
     try:
         resp = _api("POST", "/hub/register", {"instance_id": instance_id, "pubkey": pubkey, "lan_subnet": lan_subnet})
     except RuntimeError as e:

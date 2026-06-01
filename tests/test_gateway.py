@@ -113,6 +113,59 @@ def test_hub_identity_pins_tunnel_uid_only_for_first_wireguard_setup(tmp_path):
     assert wireguard_id.read_text() == "newtunl2"
 
 
+def test_hub_recovery_adopts_unique_legacy_lan_identity(tmp_path):
+    wireguard_id = tmp_path / "wireguard-instance-id"
+    peers = {
+        "data": {
+            "peers": [
+                {"role": "home", "active": True, "instance_id": "oldhome1", "pubkey": "OLDKEY", "lan_subnet": "192.168.4.0/24"},
+                {"role": "home", "active": True, "instance_id": "otherlan", "pubkey": "OTHER", "lan_subnet": "192.168.88.0/23"},
+            ],
+        },
+    }
+
+    with patch.object(hub_manager, "INSTANCE_ID_FILE", str(wireguard_id)):
+        with patch.object(hub_manager, "_api", return_value=peers):
+            recovered = hub_manager._recover_legacy_instance_id("newtunl2", "NEWKEY", "192.168.4.0/24")
+
+    assert recovered == "oldhome1"
+    assert wireguard_id.read_text() == "oldhome1"
+
+
+def test_hub_recovery_prefers_exact_key_over_lan_match(tmp_path):
+    wireguard_id = tmp_path / "wireguard-instance-id"
+    peers = {
+        "data": {
+            "peers": [
+                {"role": "home", "active": True, "instance_id": "keyhome1", "pubkey": "SAMEKEY", "lan_subnet": "192.168.1.0/24"},
+                {"role": "home", "active": True, "instance_id": "lanhome2", "pubkey": "OTHER", "lan_subnet": "192.168.4.0/24"},
+            ],
+        },
+    }
+
+    with patch.object(hub_manager, "INSTANCE_ID_FILE", str(wireguard_id)):
+        with patch.object(hub_manager, "_api", return_value=peers):
+            recovered = hub_manager._recover_legacy_instance_id("newtunl2", "SAMEKEY", "192.168.4.0/24")
+
+    assert recovered == "keyhome1"
+
+
+def test_hub_recovery_refuses_ambiguous_lan_match(tmp_path):
+    peers = {
+        "data": {
+            "peers": [
+                {"role": "home", "active": True, "instance_id": "homeone1", "pubkey": "KEY1", "lan_subnet": "192.168.1.0/24"},
+                {"role": "home", "active": True, "instance_id": "hometwo2", "pubkey": "KEY2", "lan_subnet": "192.168.1.0/24"},
+            ],
+        },
+    }
+
+    with patch.object(hub_manager, "_api", return_value=peers):
+        recovered = hub_manager._recover_legacy_instance_id("current1", "NEWKEY", "192.168.1.0/24")
+
+    assert recovered == "current1"
+
+
 def test_hub_startup_reconnect_does_not_rebuild_settling_interface(tmp_path):
     enabled_flag = tmp_path / "hub-enabled"
     enabled_flag.write_text("1")
