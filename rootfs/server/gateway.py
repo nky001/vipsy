@@ -22,11 +22,13 @@ from flask import Flask, jsonify, render_template, request, redirect
 import threading
 
 _PEER_ID_RE = re.compile(r'^[0-9a-f]{8}$')
+_INSTANCE_NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$')
 import tunnel_manager
 import vpn_manager
 import hub_manager
 import agent
 import dns_manager
+import control_plane
 
 OPTIONS_PATH = os.environ.get("OPTIONS_PATH", "/data/options.json")
 INGRESS_PORT = int(os.environ.get("INGRESS_PORT", 18099))
@@ -34,7 +36,8 @@ HA_CORE_HOST = os.environ.get("HA_CORE_HOST", "homeassistant")
 HA_CORE_PORT = int(os.environ.get("HA_CORE_PORT", 8123))
 HTTPS_HOST_PORT = int(os.environ.get("HTTPS_HOST_PORT", 443))
 AUTH_TOKEN_PATH = Path("/data/auth_token")
-BACKEND_URL = "https://vipsy-backend.nitinexus.workers.dev"
+DEFAULT_BACKEND_URL = "https://api.vipsy.in"
+BACKEND_URL = os.environ.get("VIPSY_BACKEND_URL", DEFAULT_BACKEND_URL).strip()
 
 
 def load_options():
@@ -50,6 +53,17 @@ def save_options(data):
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("w", encoding="utf-8") as f:
         json.dump(data, f)
+
+
+def _normalize_instance_name(value):
+    raw = (value or "").strip().lower()
+    if not raw:
+        return ""
+    name = re.sub(r"[^a-z0-9-]+", "-", raw).strip("-")
+    name = re.sub(r"-{2,}", "-", name)
+    if len(name) < 3 or len(name) > 32 or not _INSTANCE_NAME_RE.match(name):
+        return None
+    return name
 
 
 def _service_running(name):
@@ -410,6 +424,27 @@ def tunnel_status():
     return jsonify(tunnel_manager.status())
 
 
+@app.route("/api/instance", methods=["POST"])
+def instance_update():
+    global options
+    body = request.get_json(silent=True) or {}
+    name = _normalize_instance_name(body.get("instance_name", ""))
+    if name is None:
+        return jsonify(ok=False, error="Use 3-32 lowercase letters, numbers, or dashes"), 400
+    old_name = options.get("instance_name", "")
+    options["instance_name"] = name
+    save_options(options)
+    os.environ["INSTANCE_NAME"] = name
+    recreated = False
+    if name != old_name and tunnel_manager.is_enabled():
+        try:
+            tunnel_manager.deprovision()
+            recreated = tunnel_manager.start()
+        except Exception:
+            recreated = False
+    return jsonify(ok=True, instance_name=name, tunnel_recreated=recreated)
+
+
 @app.route("/api/diagnostics")
 def diagnostics():
     warnings = []
@@ -672,6 +707,18 @@ def vpn_peer_qr(peer_id):
     return Response(qr_data, mimetype="image/png")
 
 
+@app.route("/api/vpn/peers/<peer_id>/tunnel-bundle")
+def vpn_peer_tunnel_bundle(peer_id):
+    if not _PEER_ID_RE.match(peer_id):
+        return jsonify(ok=False, error="Invalid peer ID"), 400
+    bundle = vpn_manager.get_peer_tunnel_bundle(peer_id)
+    if not bundle:
+        return jsonify(ok=False, error="Tunnel URL not available yet"), 404
+    from flask import Response
+    return Response(bundle, mimetype="application/zip",
+                    headers={"Content-Disposition": f"attachment; filename=vipsy-{peer_id}-relay.zip"})
+
+
 
 
 
@@ -748,6 +795,11 @@ def agent_status():
     return jsonify(agent.status())
 
 
+@app.route("/api/control")
+def control_status():
+    return jsonify(control_plane.status())
+
+
 @app.route("/api/agent/enable", methods=["POST"])
 def agent_enable():
     result = agent.start()
@@ -774,6 +826,7 @@ def _hub_peers_for_template():
 
 def _index_context(**extra):
     domain = options.get("domain", "")
+    instance_name = options.get("instance_name", "")
     enable_turn = options.get("enable_turn", True)
     cert_path = os.environ.get("TLS_CERT", f"/ssl/{options.get('certfile', 'fullchain.pem')}")
     caddy_up = _service_running("caddy")
@@ -790,6 +843,7 @@ def _index_context(**extra):
             pass
     return dict(
         domain=domain,
+        instance_name=instance_name,
         mode="Remote" if domain else "LAN-only",
         caddy_up=caddy_up,
         turn_up=turn_up,
@@ -807,7 +861,7 @@ def _index_context(**extra):
         dns_upstream_default=_suggest_dns_upstream(),
         now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         ingress_entry=INGRESS_ENTRY,
-        version=options.get("_version", "2.8.4"),
+        version=options.get("_version", "2.8.8"),
         logged_in=bool(auth_token),
         backend_available=bool(BACKEND_URL),
         backend_url=BACKEND_URL,
@@ -815,6 +869,29 @@ def _index_context(**extra):
         auth_error=None,
         **extra,
     )
+
+
+def _control_snapshot():
+    tunnel = tunnel_manager.status()
+    hub = hub_manager.status()
+    vpn = vpn_manager.status()
+    agent_state = agent.status()
+    return {
+        "instance_name": options.get("instance_name") or None,
+        "permanent_url": tunnel.get("url") if tunnel.get("mode") == "static" else None,
+        "tunnel": {
+            "enabled": tunnel.get("enabled") is True,
+            "running": tunnel.get("running") is True,
+            "healthy": tunnel.get("healthy") is True,
+            "mode": tunnel.get("mode"),
+            "hostname": tunnel.get("hostname"),
+            "error": tunnel.get("error"),
+        },
+        "hub_connected": hub.get("connected") is True,
+        "local_vpn_enabled": vpn.get("enabled") is True,
+        "agent_healthy": agent_state.get("healthy") is True,
+        "addon_version": options.get("_version", "2.8.8"),
+    }
 
 
 if __name__ == "__main__":
@@ -827,6 +904,11 @@ if __name__ == "__main__":
         upstream=_suggest_dns_upstream(),
         ttl=int(options.get("smart_dns_ttl", 30) or 30),
         port=53,
+    )
+    control_plane.start(
+        _control_snapshot,
+        tunnel_manager._get_or_create_uid,
+        tunnel_manager._get_bearer_token,
     )
 
     for _attempt in range(10):

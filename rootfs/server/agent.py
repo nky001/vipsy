@@ -18,7 +18,7 @@ AGENT_ENABLED_FILE = Path("/data/agent_enabled")
 
 VPS_HOST = os.environ.get("AGENT_VPS_HOST", "")
 VPS_AGENT_PORT = int(os.environ.get("AGENT_VPS_PORT", "8443"))
-_DEFAULT_VPS_HOST = "vipsy-vps.niti.life"
+_DEFAULT_VPS_HOST = "vipsy-vps.vipsy.in"
 LOCAL_RELAY_PORT = int(os.environ.get("AGENT_LOCAL_PORT", "51822"))
 WG0_VPS_PORT = 51820
 

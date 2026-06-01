@@ -578,7 +578,6 @@ def _generate_client_config(peer_data, privkey, hub_cfg):
         "[Interface]",
         f"PrivateKey = {privkey}",
         f"Address = {vpn_ip}/{prefix}",
-        "DNS = 1.1.1.1, 1.0.0.1",
         "",
         "[Peer]",
         f"PublicKey = {vps_pubkey}",
@@ -587,6 +586,20 @@ def _generate_client_config(peer_data, privkey, hub_cfg):
         "PersistentKeepalive = 25",
     ]
     return "\n".join(lines) + "\n"
+
+
+def _sanitize_client_config(config_text):
+    lines = []
+    for line in (config_text or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("DNS ="):
+            continue
+        if stripped.startswith("AllowedIPs ="):
+            _, value = stripped.split("=", 1)
+            parts = [p.strip() for p in value.split(",") if p.strip() and p.strip() not in {"1.1.1.1/32", "1.0.0.1/32", "8.8.8.8/32"}]
+            line = "AllowedIPs = " + ", ".join(parts)
+        lines.append(line)
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def remove_peer(peer_id):
@@ -635,7 +648,12 @@ def get_peer_config(peer_id):
     local = _load_client_peers()
     cached = local.get(peer_id)
     if cached:
-        return cached.get("config")
+        config = _sanitize_client_config(cached.get("config"))
+        if config != cached.get("config"):
+            cached["config"] = config
+            local[peer_id] = cached
+            _save_client_peers(local)
+        return config
     return None
 
 

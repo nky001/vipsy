@@ -1,8 +1,10 @@
 import json
+import io
 import os
 import sys
 import tempfile
 import threading
+import zipfile
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -161,6 +163,29 @@ def test_generate_client_config():
     assert "192.168.1.0/24" in config
     assert "Endpoint = 1.2.3.4:51820" in config
     assert "PersistentKeepalive = 25" in config
+    assert "DNS =" not in config
+
+
+def test_generate_client_config_keeps_explicit_dns_opt_in():
+    peer = {"privkey": "clientpriv", "vpn_ip": "10.8.0.2"}
+    with patch.object(vpn_manager, "_detect_lan_subnet", return_value="192.168.1.0/24"):
+        with patch.object(vpn_manager, "_subnet", return_value="10.8.0.0/24"):
+            config = vpn_manager._generate_client_config(peer, "serverpub", "1.2.3.4", "192.168.1.1")
+    assert "DNS = 192.168.1.1" in config
+
+
+def test_tunnel_bundle_default_does_not_hijack_dns():
+    peer = {"privkey": "clientpriv", "vpn_ip": "10.8.0.2"}
+    with patch.object(vpn_manager, "_detect_lan_subnet", return_value="192.168.1.0/24"):
+        with patch.object(vpn_manager, "_subnet", return_value="10.8.0.0/24"):
+            with patch.object(vpn_manager, "_tunnel_url", return_value="https://place1.vipsy.in"):
+                bundle = vpn_manager.get_tunnel_bundle("abc12345", peer, "serverpub")
+    with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
+        config = archive.read("vipsy-tunnel/vipsy-tunnel.conf").decode()
+        linux_config = archive.read("vipsy-tunnel/vipsy-tunnel-linux.conf").decode()
+    assert "DNS =" not in config
+    assert "DNS =" not in linux_config
+    assert "1.1.1.1/32" not in config
 
 
 def test_expire_peers():

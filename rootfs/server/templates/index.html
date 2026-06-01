@@ -59,6 +59,24 @@
     </div>
     {% endif %}
 
+    <section class="section-title">Instance</section>
+    <div class="card instance-card">
+      <div class="access-row">
+        <span class="access-label">Name</span>
+        <span class="access-value mono" id="instance-current">{{ instance_name or tunnel.instance_name or tunnel.unique_id or 'not set' }}</span>
+      </div>
+      <div class="form-group" style="margin-top:.75rem">
+        <label for="instance-name">Friendly name</label>
+        <input type="text" id="instance-name" class="form-input" value="{{ instance_name or '' }}" placeholder="place1" maxlength="32">
+      </div>
+      <div class="vpn-peer-actions">
+        <button class="btn btn--sm btn--blue" id="instance-save-btn" onclick="saveInstanceName()">Save Name</button>
+      </div>
+      <div class="access-card__hint access-card__hint--info" style="margin-top:.75rem">
+        Managed tunnel hostnames use <strong>{{ tunnel.managed_domain or 'vipsy.in' }}</strong>. Older managed hostnames are replaced safely on the next tunnel start after the new DNS record succeeds.
+      </div>
+    </div>
+
     {% if tunnel.enabled %}
     <section class="section-title">Secure Tunnel</section>
     <div class="tunnel-card {{ 'tunnel-card--ok' if tunnel.healthy else ('tunnel-card--warn' if tunnel.running else 'tunnel-card--err') }}" id="tunnel-card">
@@ -104,6 +122,10 @@
         <div class="access-row">
           <span class="access-label">Provider</span>
           <span class="access-value">Cloudflare {{ '(Static)' if tunnel.mode == 'static' else '(Quick — URL resets on restart)' }}</span>
+        </div>
+        <div class="access-row">
+          <span class="access-label">Managed Domain</span>
+          <span class="access-value mono">{{ tunnel.managed_domain or 'vipsy.in' }}</span>
         </div>
         {% if tunnel.error %}
         <div class="tunnel-error">
@@ -377,6 +399,7 @@
           <div class="vpn-peer-actions">
             <a class="btn btn--sm" id="vpn-peer-dl-remote" href="#" download>⬇ Remote .conf</a>
             <a class="btn btn--sm" id="vpn-peer-qr-remote" href="#" target="_blank">QR</a>
+            <a class="btn btn--sm btn--blue" id="vpn-peer-dl-tunnel" href="#" download style="display:none">Relay ZIP</a>
           </div>
         </div>
       </div>
@@ -400,6 +423,9 @@
               <td>
                 <a href="{{ ingress_entry }}/api/vpn/peers/{{ p.peer_id }}/config?network=lan" class="btn btn--sm" title="LAN config">⬇ LAN</a>
                 <a href="{{ ingress_entry }}/api/vpn/peers/{{ p.peer_id }}/config?network=remote" class="btn btn--sm" title="Remote config">⬇ WAN</a>
+                {% if tunnel.url or tunnel.fallback_url %}
+                <a href="{{ ingress_entry }}/api/vpn/peers/{{ p.peer_id }}/tunnel-bundle" class="btn btn--sm btn--blue" title="Cloudflare relay bundle">Relay</a>
+                {% endif %}
                 <a href="{{ ingress_entry }}/api/vpn/peers/{{ p.peer_id }}/qr?network=lan" class="btn btn--sm" target="_blank" title="LAN QR">◻</a>
                 <button class="btn btn--sm btn--red" onclick="vpnRemovePeer('{{ p.peer_id }}')" title="Remove peer">✕</button>
               </td>

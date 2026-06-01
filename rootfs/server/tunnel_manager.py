@@ -27,6 +27,13 @@ HTTPS_PORT = int(os.environ.get("CADDY_HTTPS_PORT", "443"))
 BACKEND_URL = os.environ.get("VIPSY_BACKEND_URL", "")
 SERVICE_KEY = os.environ.get("VIPSY_SERVICE_KEY", "7ae5a1d9a1d4ecf98c2d08f23441638924c370e1686deba790f0cd3d1fc26426")
 AUTH_TOKEN_PATH = Path("/data/auth_token")
+MANAGED_DOMAIN = os.environ.get("VIPSY_MANAGED_DOMAIN", "vipsy.in").strip().lower()
+LEGACY_DOMAINS = tuple(
+    d.strip().lower()
+    for d in os.environ.get("VIPSY_LEGACY_DOMAINS", "niti.life").split(",")
+    if d.strip()
+)
+INSTANCE_NAME_RE = re.compile(r"[^a-z0-9-]+")
 
 _lock = Lock()
 _process = None
@@ -118,6 +125,19 @@ def _get_or_create_uid():
     return uid
 
 
+def _instance_name():
+    raw = os.environ.get("INSTANCE_NAME", "").strip().lower()
+    if not raw:
+        return ""
+    name = INSTANCE_NAME_RE.sub("-", raw).strip("-")
+    name = re.sub(r"-{2,}", "-", name)
+    if not name or len(name) > 32:
+        return ""
+    if not re.match(r"^[a-z0-9][a-z0-9-]*[a-z0-9]$", name):
+        return ""
+    return name
+
+
 def _load_creds():
     try:
         if TUNNEL_CREDS_FILE.exists():
@@ -135,10 +155,46 @@ def _save_creds(creds):
         TUNNEL_URL_FILE.write_text(creds["url"])
 
 
+def _hostname_domain(hostname):
+    host = (hostname or "").strip().lower().rstrip(".")
+    if not host:
+        return ""
+    return host
+
+
+def _creds_need_migration(creds):
+    host = _hostname_domain((creds or {}).get("hostname"))
+    if not host:
+        return False
+    if any(host == d or host.endswith("." + d) for d in LEGACY_DOMAINS):
+        return True
+    if MANAGED_DOMAIN and not (host == MANAGED_DOMAIN or host.endswith("." + MANAGED_DOMAIN)):
+        return True
+    return False
+
+
+def _forget_static_creds():
+    TUNNEL_CREDS_FILE.unlink(missing_ok=True)
+    TUNNEL_URL_FILE.unlink(missing_ok=True)
+
+
+def _deregister_uid(uid):
+    if not uid or not _backend_available():
+        return
+    try:
+        _api("POST", "/tunnel/deregister", {"instance_id": uid})
+    except Exception:
+        pass
+
+
 def _register():
     global _provision_error
     uid = _get_or_create_uid()
-    resp = _api("POST", "/tunnel/register", {"instance_id": uid, "origin_port": HTTPS_PORT})
+    body = {"instance_id": uid, "origin_port": HTTPS_PORT, "domain": MANAGED_DOMAIN}
+    name = _instance_name()
+    if name:
+        body["instance_name"] = name
+    resp = _api("POST", "/tunnel/register", body)
     if not resp.get("ok"):
         msg = resp.get("error", "Registration failed")
         _provision_error = msg
@@ -293,9 +349,17 @@ def start():
             return False
         _ensure_dirs()
         log_fd = open(TUNNEL_LOG_FILE, "w")
+        migration_error = ""
         try:
             if _backend_available():
                 creds = _load_creds()
+                if creds and _creds_need_migration(creds):
+                    try:
+                        creds = _register()
+                    except Exception as exc:
+                        # Keep the last known working connector until the
+                        # replacement hostname has been provisioned safely.
+                        migration_error = f"Domain migration delayed: {exc}"
                 if not creds:
                     creds = _register()
                 TUNNEL_URL_FILE.write_text(creds["url"])
@@ -316,7 +380,7 @@ def start():
             _process = subprocess.Popen(cmd, stdout=log_fd, stderr=log_fd)
             log_fd.close()
             TUNNEL_PID_FILE.write_text(str(_process.pid))
-            _provision_error = ""
+            _provision_error = migration_error
             if _backend_available():
                 _start_fallback()
             return True
@@ -404,6 +468,8 @@ def status():
         "url": url,
         "fallback_url": fallback_url,
         "provider": "cloudflare",
+        "managed_domain": MANAGED_DOMAIN,
+        "instance_name": _instance_name() or None,
         "error": _provision_error or None,
         "agent_mode": _agent_mode,
         "agent_url": _agent_url or None,

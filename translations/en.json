@@ -1,5 +1,9 @@
 {
   "configuration": {
+    "instance_name": {
+      "name": "Instance name",
+      "description": "Friendly name for this Vipsy instance, such as place1 or home-office. Used for display now and for managed vipsy.in tunnel naming when supported by the backend."
+    },
     "domain": {
       "name": "Domain",
       "description": "Your public domain for remote access (e.g. ha.example.com). Leave empty for LAN-only mode."

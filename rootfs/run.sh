@@ -3,6 +3,7 @@ set -e
 
 OPTIONS_FILE="/data/options.json"
 DOMAIN=$(jq -r '.domain // ""' "$OPTIONS_FILE")
+INSTANCE_NAME=$(jq -r '.instance_name // ""' "$OPTIONS_FILE")
 CERTFILE=$(jq -r '.certfile // "fullchain.pem"' "$OPTIONS_FILE")
 KEYFILE=$(jq -r '.keyfile // "privkey.pem"' "$OPTIONS_FILE")
 ENABLE_TURN=$(jq -r '.enable_turn // true' "$OPTIONS_FILE")
@@ -139,6 +140,7 @@ fi
 export CADDY_HTTPS_PORT="$ACTUAL_PORT"
 export PUBLIC_IP="$PUBLIC_IP"
 export DOMAIN="$DOMAIN"
+export INSTANCE_NAME="$INSTANCE_NAME"
 export HOST_IP="$HOST_IP"
 
 echo "[vipsy] enabling IP forwarding for VPN NAT"

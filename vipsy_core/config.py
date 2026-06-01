@@ -1,4 +1,5 @@
 DEFAULTS = {
+    "instance_name": "",
     "domain": "",
     "certfile": "fullchain.pem",
     "keyfile": "privkey.pem",
@@ -9,8 +10,10 @@ DEFAULTS = {
 
 INGRESS_PORT = 18099
 HA_CORE_URL = "http://homeassistant:8123"
-VIPSY_BACKEND_URL = "https://vipsy-backend.nitinexus.workers.dev"
+VIPSY_BACKEND_URL = "https://api.vipsy.in"
 VIPSY_SERVICE_KEY = ""
+VIPSY_MANAGED_DOMAIN = "vipsy.in"
+VIPSY_LEGACY_DOMAINS = ["niti.life"]
 
 VPN_DATA_DIR = "/data/wireguard"
 VPN_PEERS_FILE = "/data/wireguard/peers.json"

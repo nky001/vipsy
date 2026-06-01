@@ -1,7 +1,7 @@
 ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-python:3.11-alpine3.18
 FROM ${BUILD_FROM}
 
-ARG VIPSY_BACKEND_URL="https://vipsy-backend.nitinexus.workers.dev"
+ARG VIPSY_BACKEND_URL="https://api.vipsy.in"
 ARG VIPSY_SERVICE_KEY="7ae5a1d9a1d4ecf98c2d08f23441638924c370e1686deba790f0cd3d1fc26426"
 
 ENV VIPSY_BACKEND_URL=${VIPSY_BACKEND_URL}

@@ -2,6 +2,7 @@
   var POLL_MS = 20000;
   var _loggedIn = window.LOGGED_IN;
   var _tunnelMode = "";
+  var _tunnelUrlAvailable = false;
 
   function setText(id, val) {
     var el = document.getElementById(id);
@@ -162,6 +163,7 @@
           }
         }
         setText("tunnel-uid", d.unique_id || "\u2014");
+        _tunnelUrlAvailable = !!(d.url || d.fallback_url);
         if (d.mode) _tunnelMode = d.mode;
         if (d.mode === "quick") {
           var qRow = document.getElementById("tunnel-quick-url-row");
@@ -301,6 +303,32 @@
       .catch(function () { alert("Network error"); });
   };
 
+  window.saveInstanceName = function () {
+    var input = document.getElementById("instance-name");
+    var btn = document.getElementById("instance-save-btn");
+    var name = ((input || {}).value || "").trim().toLowerCase();
+    if (btn) { btn.disabled = true; btn.textContent = "Saving..."; }
+    fetch(basePath + "api/instance", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instance_name: name })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (btn) { btn.disabled = false; btn.textContent = "Save Name"; }
+        if (!d.ok) {
+          alert(d.error || "Failed to save instance name");
+          return;
+        }
+        setText("instance-current", d.instance_name || "not set");
+        if (d.tunnel_recreated) schedTunnel(true);
+      })
+      .catch(function () {
+        if (btn) { btn.disabled = false; btn.textContent = "Save Name"; }
+        alert("Network error");
+      });
+  };
+
   function refreshVpn() {
     fetch(basePath + "api/vpn")
       .then(function (r) { return r.json(); })
@@ -345,6 +373,7 @@
             "<td>" +
             '<a href="' + basePath + "api/vpn/peers/" + p.peer_id + '/config?network=lan" class="btn btn--sm" title="LAN config">\u2B07 LAN</a>' +
             '<a href="' + basePath + "api/vpn/peers/" + p.peer_id + '/config?network=remote" class="btn btn--sm" title="Remote config">\u2B07 WAN</a>' +
+            (_tunnelUrlAvailable ? '<a href="' + basePath + "api/vpn/peers/" + p.peer_id + '/tunnel-bundle" class="btn btn--sm btn--blue" title="Cloudflare relay bundle">Relay</a>' : "") +
             '<a href="' + basePath + "api/vpn/peers/" + p.peer_id + '/qr?network=lan" class="btn btn--sm" target="_blank" title="LAN QR">\u25FB</a>' +
             '<button class="btn btn--sm btn--red" onclick="vpnRemovePeer(\'' + p.peer_id + '\')" title="Remove peer">\u2715</button>' +
             "</td></tr>";
@@ -424,6 +453,7 @@
         if (qrLink && d.peer) qrLink.href = basePath + "api/vpn/peers/" + d.peer.peer_id + "/qr?network=lan";
         var remoteDl = document.getElementById("vpn-peer-dl-remote");
         var remoteQr = document.getElementById("vpn-peer-qr-remote");
+        var tunnelBundle = document.getElementById("vpn-peer-dl-tunnel");
         var remoteBlock = document.getElementById("vpn-remote-block");
         var remoteConfigEl = document.getElementById("vpn-peer-remote-config-text");
         if (d.remote_config && d.peer) {
@@ -431,6 +461,12 @@
           if (remoteConfigEl) remoteConfigEl.textContent = d.remote_config;
           if (remoteDl) remoteDl.href = basePath + "api/vpn/peers/" + d.peer.peer_id + "/config?network=remote";
           if (remoteQr) remoteQr.href = basePath + "api/vpn/peers/" + d.peer.peer_id + "/qr?network=remote";
+          if (tunnelBundle && d.tunnel_bundle_available) {
+            tunnelBundle.href = basePath + "api/vpn/peers/" + d.peer.peer_id + "/tunnel-bundle";
+            tunnelBundle.style.display = "";
+          } else if (tunnelBundle) {
+            tunnelBundle.style.display = "none";
+          }
         } else {
           if (remoteBlock) remoteBlock.style.display = "none";
         }

@@ -424,7 +424,7 @@ def _restore_peers():
             pass
 
 
-def _generate_client_config(peer, server_pubkey, endpoint, dns="1.1.1.1, 1.0.0.1"):
+def _generate_client_config(peer, server_pubkey, endpoint, dns=None):
     lan = _detect_lan_subnet()
     subnet = _subnet()
     allowed_ips = f"{lan}, {subnet}"
@@ -432,11 +432,10 @@ def _generate_client_config(peer, server_pubkey, endpoint, dns="1.1.1.1, 1.0.0.1
         "[Interface]",
         f"PrivateKey = {peer['privkey']}",
         f"Address = {peer['vpn_ip']}/{_network(subnet).prefixlen}",
-        f"DNS = {dns}",
-        "",
-        "[Peer]",
-        f"PublicKey = {server_pubkey}",
     ]
+    if dns:
+        lines.append(f"DNS = {dns}")
+    lines += ["", "[Peer]", f"PublicKey = {server_pubkey}"]
     if peer.get("preshared_key"):
         lines.append(f"PresharedKey = {peer['preshared_key']}")
     lines += [
@@ -751,7 +750,7 @@ if __name__ == "__main__":
 '''
 
 
-def get_tunnel_bundle(peer_id, peer, server_pubkey, dns="1.1.1.1, 1.0.0.1"):
+def get_tunnel_bundle(peer_id, peer, server_pubkey, dns=None):
     import io
     import zipfile
     turl = _tunnel_url()
@@ -768,11 +767,10 @@ def get_tunnel_bundle(peer_id, peer, server_pubkey, dns="1.1.1.1, 1.0.0.1"):
         "[Interface]",
         f"PrivateKey = {peer['privkey']}",
         f"Address = {peer['vpn_ip']}/{prefix}",
-        f"DNS = {dns}",
-        "",
-        "[Peer]",
-        f"PublicKey = {server_pubkey}",
     ]
+    if dns:
+        conf_lines.append(f"DNS = {dns}")
+    conf_lines += ["", "[Peer]", f"PublicKey = {server_pubkey}"]
     if peer.get("preshared_key"):
         conf_lines.append(f"PresharedKey = {peer['preshared_key']}")
     conf_lines += [
@@ -785,7 +783,10 @@ def get_tunnel_bundle(peer_id, peer, server_pubkey, dns="1.1.1.1, 1.0.0.1"):
         "[Interface]",
         f"PrivateKey = {peer['privkey']}",
         f"Address = {peer['vpn_ip']}/{prefix}",
-        f"DNS = {dns}",
+    ]
+    if dns:
+        conf_linux_lines.append(f"DNS = {dns}")
+    conf_linux_lines += [
         "PreUp = nohup python3 %i/vipsy-relay.py >/dev/null 2>&1 &",
         "PreUp = sleep 2",
         "PostDown = pkill -f vipsy-relay.py || true",
@@ -863,6 +864,15 @@ def get_tunnel_bundle(peer_id, peer, server_pubkey, dns="1.1.1.1, 1.0.0.1"):
         zf.writestr("vipsy-tunnel/uninstall.cmd", uninstall_cmd)
         zf.writestr("vipsy-tunnel/README.txt", readme)
     return buf.getvalue()
+
+
+def get_peer_tunnel_bundle(peer_id, dns=None):
+    peers = _load_peers()
+    for p in peers:
+        if p["peer_id"] == peer_id:
+            _, server_pubkey = _get_or_create_server_keys()
+            return get_tunnel_bundle(peer_id, p, server_pubkey, dns)
+    return None
 
 
 def _ttl_watcher():
@@ -1019,7 +1029,7 @@ def add_peer(name, ttl=None, persistent=False, dns=None):
         lan_ep = _get_endpoint("lan")
         remote_ep = _get_endpoint("remote")
         tunnel_ep = _get_endpoint("tunnel")
-        dns_str = dns or "1.1.1.1, 1.0.0.1"
+        dns_str = dns or None
         lan_config = _generate_client_config(peer, server_pubkey, lan_ep, dns_str)
         remote_config = _generate_client_config(peer, server_pubkey, remote_ep, dns_str) if remote_ep != lan_ep else None
         tunnel_config = _generate_client_config(peer, server_pubkey, tunnel_ep, dns_str)
@@ -1033,6 +1043,7 @@ def add_peer(name, ttl=None, persistent=False, dns=None):
             "remote_config": remote_config,
             "tunnel_config": tunnel_config if turl else None,
             "tunnel_url": turl,
+            "tunnel_bundle_available": bool(turl),
             "qr_available": qr_png is not None,
             "endpoints": _endpoint_info(),
         }
