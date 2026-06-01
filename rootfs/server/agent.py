@@ -15,6 +15,8 @@ _log = logging.getLogger("vipsy.agent")
 AUTH_TOKEN_PATH = Path("/data/auth_token")
 AGENT_STATE_FILE = Path("/data/agent_state.json")
 AGENT_ENABLED_FILE = Path("/data/agent_enabled")
+WIREGUARD_INSTANCE_ID_FILE = Path("/data/wireguard/instance_id")
+TUNNEL_UID_FILE = Path("/data/tunnel/uid")
 
 VPS_HOST = os.environ.get("AGENT_VPS_HOST", "")
 VPS_AGENT_PORT = int(os.environ.get("AGENT_VPS_PORT", "8443"))
@@ -84,7 +86,7 @@ def _get_bearer_token():
 
 
 def _get_instance_id():
-    for src in [Path("/data/tunnel/uid"), Path("/data/wireguard/instance_id")]:
+    for src in [WIREGUARD_INSTANCE_ID_FILE, TUNNEL_UID_FILE]:
         try:
             if src.exists():
                 uid = src.read_text().strip()

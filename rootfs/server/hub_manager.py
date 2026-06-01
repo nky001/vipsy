@@ -29,6 +29,7 @@ HUB_CONFIG_FILE = os.path.join(VPN_DATA_DIR, "hub_config.json")
 HUB_CLIENT_PEERS_FILE = os.path.join(VPN_DATA_DIR, "hub_peers.json")
 HUB_ENABLED_FILE = os.path.join(VPN_DATA_DIR, "hub_enabled")
 INSTANCE_ID_FILE = os.path.join(VPN_DATA_DIR, "instance_id")
+TUNNEL_UID_FILE = "/data/tunnel/uid"
 
 BACKEND_URL = os.environ.get("VIPSY_BACKEND_URL", "")
 AUTH_TOKEN_PATH = Path("/data/auth_token")
@@ -169,11 +170,15 @@ def _get_lan_subnet():
 
 
 def _get_instance_id():
-    for src in [Path("/data/tunnel/uid"), Path(INSTANCE_ID_FILE)]:
+    instance_path = Path(INSTANCE_ID_FILE)
+    for src in [instance_path, Path(TUNNEL_UID_FILE)]:
         try:
             if src.exists():
                 uid = src.read_text().strip()
                 if len(uid) == 8:
+                    if src != instance_path:
+                        _data_dir()
+                        instance_path.write_text(uid)
                     return uid
         except Exception:
             pass
@@ -469,6 +474,14 @@ def startup_reconnect():
     if not enabled_flag.exists():
         print("[vipsy.hub] startup_reconnect: no hub_enabled flag, skipping", flush=True)
         return
+    if _interface_exists():
+        cfg = _load_hub_config()
+        subnet = cfg.get("subnet") if cfg else None
+        if subnet:
+            _ensure_forwarding(HUB_INTERFACE)
+            _apply_hub_nat(subnet)
+        print("[vipsy.hub] startup_reconnect: wg-hub already up, leaving handshake to settle", flush=True)
+        return
     print("[vipsy.hub] startup_reconnect: hub was previously enabled, reconnecting...", flush=True)
     result = enable()
     if result.get("ok"):
@@ -499,7 +512,10 @@ def switch_endpoint(endpoint_str):
 
 def status():
     cfg = _load_hub_config()
-    connected = _interface_exists()
+    interface_up = _interface_exists()
+    enabled = Path(HUB_ENABLED_FILE).exists() or interface_up
+    handshake_age = _latest_handshake_age_seconds() if interface_up else None
+    connected = handshake_age is not None and handshake_age < 180
     peer_count = 0
     try:
         local = _load_client_peers()
@@ -521,7 +537,10 @@ def status():
         pass
     return {
         "registered": cfg is not None,
+        "enabled": enabled,
+        "interface_up": interface_up,
         "connected": connected,
+        "handshake_age_seconds": round(handshake_age, 1) if handshake_age is not None else None,
         "vpn_ip": cfg.get("vpn_ip") if cfg else None,
         "lan_subnet": cfg.get("lan_subnet") if cfg else None,
         "peer_count": peer_count,

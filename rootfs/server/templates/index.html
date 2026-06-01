@@ -458,18 +458,18 @@
         </svg>
         <span>Remote Access</span>
         <span class="access-status {{ 'access-status--ok' if hub.connected else 'access-status--neutral' }}" id="hub-status-badge">
-          {% if hub.connected %}✓ Connected{% else %}○ Off{% endif %}
+          {% if hub.connected %}✓ Connected{% elif hub.enabled %}○ Waiting for VPS handshake{% else %}○ Off{% endif %}
         </span>
       </div>
       <div class="vpn-card__body">
         <div class="vpn-controls">
-          {% if not hub.connected %}
+          {% if not hub.enabled %}
           <button class="btn btn--sm btn--green" id="hub-enable-btn" onclick="hubEnable()">Enable Remote Access</button>
           {% else %}
           <button class="btn btn--sm btn--red" id="hub-disable-btn" onclick="hubDisable()">Disable Remote Access</button>
           {% endif %}
         </div>
-        {% if hub.connected %}
+        {% if hub.enabled %}
         <div class="access-row">
           <span class="access-label">Your VPN IP</span>
           <span class="access-value mono">{{ hub.vpn_ip }}</span>
@@ -487,13 +487,15 @@
         {% endif %}
       </div>
       {% if hub.connected %}
-      <div class="vpn-card__hint vpn-card__hint--ok">Remote access is active. Add devices below to connect from anywhere.</div>
+      <div class="vpn-card__hint vpn-card__hint--ok" id="hub-status-hint">Remote access is active. Add devices below to connect from anywhere.</div>
+      {% elif hub.enabled %}
+      <div class="vpn-card__hint vpn-card__hint--neutral" id="hub-status-hint">The local interface is ready, but the VPS handshake has not completed. Check VPS sync and the assigned UDP port.</div>
       {% else %}
-      <div class="vpn-card__hint vpn-card__hint--neutral">Enable remote access to let your devices securely reach your home network from anywhere — no port forwarding required.</div>
+      <div class="vpn-card__hint vpn-card__hint--neutral" id="hub-status-hint">Enable remote access to let your devices securely reach your home network from anywhere — no port forwarding required.</div>
       {% endif %}
     </div>
 
-    {% if hub.connected %}
+    {% if hub.enabled %}
     <div class="vpn-peers-section">
       <div class="vpn-peers-header">
         <span class="section-title" style="margin:0">Remote Devices</span>
@@ -527,7 +529,7 @@
 
       <div id="hub-peers-list">
         <div class="card muted small" id="hub-no-peers" style="text-align:center;padding:1.5rem;display:none">No devices yet. Click <strong>+ Add Device</strong> to create one.</div>
-        <table class="vpn-peers-table" id="hub-peers-table" style="{{ 'display:none' if not hub.connected else '' }}">
+        <table class="vpn-peers-table" id="hub-peers-table">
           <thead>
             <tr><th>Device</th><th>IP</th><th></th></tr>
           </thead>
@@ -621,7 +623,7 @@
           </tr>
           <tr>
             <td>Remote Access</td>
-            <td><span class="dot dot--{{ 'green' if hub.connected else 'gray' }}"></span>{{ 'Up' if hub.connected else 'Off' }}</td>
+            <td><span class="dot dot--{{ 'green' if hub.connected else ('yellow' if hub.enabled else 'gray') }}"></span>{{ 'Connected' if hub.connected else ('Waiting' if hub.enabled else 'Off') }}</td>
             <td class="muted">Remote VPN ({{ hub.peer_count }} devices)</td>
           </tr>
           <tr>

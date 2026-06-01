@@ -500,7 +500,12 @@ def diagnostics():
         pass
 
     hub_status = hub_manager.status()
-    if hub_status.get("connected") or vpn_status["enabled"]:
+    if hub_status.get("enabled") and hub_status.get("interface_up") and not hub_status.get("connected"):
+        warnings.append(
+            "Remote Access VPN is enabled but the VPS handshake has not completed. "
+            "Verify that the VPS sync timer is running and its assigned UDP port is listening."
+        )
+    if hub_status.get("enabled") or vpn_status["enabled"]:
         try:
             with open("/proc/sys/net/ipv4/ip_forward") as f:
                 if f.read().strip() != "1":

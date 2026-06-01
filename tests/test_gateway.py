@@ -65,6 +65,82 @@ def test_diagnostics():
     assert "count" in data
 
 
+def test_hub_status_requires_recent_handshake_for_connected_state():
+    cfg = {"vpn_ip": "10.100.2.2", "lan_subnet": "192.168.4.0/24"}
+    with patch.object(hub_manager, "_load_hub_config", return_value=cfg):
+        with patch.object(hub_manager, "_interface_exists", return_value=True):
+            with patch.object(hub_manager, "_latest_handshake_age_seconds", return_value=None):
+                state = hub_manager.status()
+
+    assert state["enabled"] is True
+    assert state["interface_up"] is True
+    assert state["connected"] is False
+    assert state["handshake_age_seconds"] is None
+
+
+def test_hub_status_reports_recent_handshake_as_connected():
+    cfg = {"vpn_ip": "10.100.2.2", "lan_subnet": "192.168.4.0/24"}
+    with patch.object(hub_manager, "_load_hub_config", return_value=cfg):
+        with patch.object(hub_manager, "_interface_exists", return_value=True):
+            with patch.object(hub_manager, "_latest_handshake_age_seconds", return_value=12.25):
+                state = hub_manager.status()
+
+    assert state["enabled"] is True
+    assert state["connected"] is True
+    assert state["handshake_age_seconds"] == 12.2
+
+
+def test_hub_identity_keeps_existing_wireguard_id_when_tunnel_uid_changes(tmp_path):
+    wireguard_id = tmp_path / "wireguard-instance-id"
+    tunnel_id = tmp_path / "tunnel-uid"
+    wireguard_id.write_text("oldhome1")
+    tunnel_id.write_text("newtunl2")
+
+    with patch.object(hub_manager, "INSTANCE_ID_FILE", str(wireguard_id)):
+        with patch.object(hub_manager, "TUNNEL_UID_FILE", str(tunnel_id)):
+            assert hub_manager._get_instance_id() == "oldhome1"
+
+
+def test_hub_identity_pins_tunnel_uid_only_for_first_wireguard_setup(tmp_path):
+    wireguard_id = tmp_path / "wireguard-instance-id"
+    tunnel_id = tmp_path / "tunnel-uid"
+    tunnel_id.write_text("newtunl2")
+
+    with patch.object(hub_manager, "INSTANCE_ID_FILE", str(wireguard_id)):
+        with patch.object(hub_manager, "TUNNEL_UID_FILE", str(tunnel_id)):
+            assert hub_manager._get_instance_id() == "newtunl2"
+
+    assert wireguard_id.read_text() == "newtunl2"
+
+
+def test_hub_startup_reconnect_does_not_rebuild_settling_interface(tmp_path):
+    enabled_flag = tmp_path / "hub-enabled"
+    enabled_flag.write_text("1")
+    cfg = {"subnet": "10.100.1.0/24"}
+
+    with patch.object(hub_manager, "HUB_ENABLED_FILE", str(enabled_flag)):
+        with patch.object(hub_manager, "_interface_exists", return_value=True):
+            with patch.object(hub_manager, "_load_hub_config", return_value=cfg):
+                with patch.object(hub_manager, "_ensure_forwarding") as forwarding:
+                    with patch.object(hub_manager, "_apply_hub_nat") as apply_nat:
+                        with patch.object(hub_manager, "enable") as enable:
+                            hub_manager.startup_reconnect()
+
+    forwarding.assert_called_once_with(hub_manager.HUB_INTERFACE)
+    apply_nat.assert_called_once_with("10.100.1.0/24")
+    enable.assert_not_called()
+
+
+def test_diagnostics_warn_when_hub_interface_has_no_handshake():
+    hub_state = {"enabled": True, "interface_up": True, "connected": False}
+    with patch.object(gateway.hub_manager, "status", return_value=hub_state):
+        resp = _client().get("/api/diagnostics")
+
+    assert resp.status_code == 200
+    warnings = resp.get_json()["warnings"]
+    assert any("VPS handshake has not completed" in warning for warning in warnings)
+
+
 def test_tunnel_endpoint():
     resp = _client().get("/api/tunnel")
     assert resp.status_code == 200

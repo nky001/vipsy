@@ -527,6 +527,9 @@
           if (s.connected) {
             badge.textContent = "\u2713 Connected";
             badge.className = "access-status access-status--ok";
+          } else if (s.enabled) {
+            badge.textContent = "\u25CB Waiting for VPS handshake";
+            badge.className = "access-status access-status--neutral";
           } else {
             badge.textContent = "\u25CB Off";
             badge.className = "access-status access-status--neutral";
@@ -534,6 +537,19 @@
         }
         var card = document.getElementById("hub-card");
         if (card) card.className = "vpn-card " + (s.connected ? "vpn-card--ok" : "vpn-card--off");
+        var hint = document.getElementById("hub-status-hint");
+        if (hint) {
+          if (s.connected) {
+            hint.textContent = "Remote access is active. Add devices below to connect from anywhere.";
+            hint.className = "vpn-card__hint vpn-card__hint--ok";
+          } else if (s.enabled) {
+            hint.textContent = "The local interface is ready, but the VPS handshake has not completed. Check VPS sync and the assigned UDP port.";
+            hint.className = "vpn-card__hint vpn-card__hint--neutral";
+          } else {
+            hint.textContent = "Enable remote access to let your devices securely reach your home network from anywhere \u2014 no port forwarding required.";
+            hint.className = "vpn-card__hint vpn-card__hint--neutral";
+          }
+        }
         var pc = document.getElementById("hub-peer-count");
         if (pc) pc.textContent = (s.peer_count || 0).toString();
       })
