@@ -909,6 +909,7 @@ def _control_snapshot():
 
 if __name__ == "__main__":
     tunnel_manager.start()
+    vpn_manager.startup_reconnect()
     hub_manager.startup_reconnect()
     dns_manager.apply_config(
         enabled=bool(options.get("smart_dns_enabled", False)),

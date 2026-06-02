@@ -255,6 +255,66 @@ def test_startup_cleanup():
             _stop_patches(patches)
 
 
+def test_startup_cleanup_remembers_active_local_vpn_before_destroying_interface():
+    with tempfile.TemporaryDirectory() as tmp:
+        fake = FakePeersDir(tmp)
+        patches = _apply_patches(fake)
+        try:
+            with patch.object(vpn_manager, "_stop_relay"):
+                with patch.object(vpn_manager, "_flush_nat_rules"):
+                    with patch.object(vpn_manager, "_interface_exists", return_value=True):
+                        with patch.object(vpn_manager, "_destroy_interface") as destroy:
+                            vpn_manager.startup_cleanup()
+            assert vpn_manager.is_enabled() is True
+            destroy.assert_called_once_with()
+        finally:
+            _stop_patches(patches)
+
+
+def test_startup_reconnect_restores_enabled_local_vpn():
+    with tempfile.TemporaryDirectory() as tmp:
+        fake = FakePeersDir(tmp)
+        patches = _apply_patches(fake)
+        try:
+            vpn_manager._remember_enabled(True)
+            with patch.object(vpn_manager, "enable", return_value={"ok": True, "message": "VPN enabled"}) as enable:
+                result = vpn_manager.startup_reconnect()
+            assert result["ok"] is True
+            enable.assert_called_once_with()
+        finally:
+            _stop_patches(patches)
+
+
+def test_startup_reconnect_skips_disabled_local_vpn():
+    with tempfile.TemporaryDirectory() as tmp:
+        fake = FakePeersDir(tmp)
+        patches = _apply_patches(fake)
+        try:
+            with patch.object(vpn_manager, "enable") as enable:
+                result = vpn_manager.startup_reconnect()
+            assert result["ok"] is True
+            assert result["message"] == "Local VPN disabled"
+            enable.assert_not_called()
+        finally:
+            _stop_patches(patches)
+
+
+def test_disable_forgets_local_vpn_enabled_state():
+    with tempfile.TemporaryDirectory() as tmp:
+        fake = FakePeersDir(tmp)
+        patches = _apply_patches(fake)
+        try:
+            vpn_manager._remember_enabled(True)
+            with patch.object(vpn_manager, "_stop_ttl_watcher"):
+                with patch.object(vpn_manager, "_stop_relay"):
+                    with patch.object(vpn_manager, "_interface_exists", return_value=False):
+                        with patch.object(vpn_manager, "_flush_nat_rules"):
+                            vpn_manager.disable()
+            assert vpn_manager.is_enabled() is False
+        finally:
+            _stop_patches(patches)
+
+
 def test_status_when_disabled():
     with patch.object(vpn_manager, "_interface_exists", return_value=False):
         with patch.object(vpn_manager, "_load_peers", return_value=[]):

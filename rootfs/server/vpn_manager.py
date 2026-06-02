@@ -60,6 +60,23 @@ def _data_dir():
     return d
 
 
+def _enabled_path():
+    return _data_dir() / "enabled"
+
+
+def _remember_enabled(enabled):
+    path = _enabled_path()
+    if enabled:
+        path.write_text("1")
+        path.chmod(0o600)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def is_enabled():
+    return _enabled_path().exists()
+
+
 def _server_key_path():
     return Path(VPN_SERVER_KEY)
 
@@ -980,6 +997,7 @@ def _stop_ttl_watcher():
 def enable():
     with _lock:
         if _interface_exists():
+            _remember_enabled(True)
             _start_ttl_watcher()
             relay_ready = _start_relay()
             result = {"ok": True, "message": "VPN already enabled"}
@@ -996,6 +1014,7 @@ def enable():
         _create_interface(privkey, port, server_ip, subnet)
         _apply_nat_rules()
         _restore_peers()
+        _remember_enabled(True)
         _start_ttl_watcher()
         relay_ready = _start_relay()
         _audit("enable", extra={"subnet": subnet, "port": port})
@@ -1011,6 +1030,7 @@ def enable():
 
 def disable():
     with _lock:
+        _remember_enabled(False)
         _stop_ttl_watcher()
         _stop_relay()
         if _interface_exists():
@@ -1022,6 +1042,7 @@ def disable():
 
 def kill():
     with _lock:
+        _remember_enabled(False)
         _stop_ttl_watcher()
         _stop_relay()
         peers = _load_peers()
@@ -1238,6 +1259,8 @@ def startup_cleanup():
     _stop_relay()
     _flush_nat_rules()
     if _interface_exists():
+        # Preserve user intent before replacing stale host-network state.
+        _remember_enabled(True)
         _destroy_interface()
     now = datetime.now(timezone.utc)
     peers = _load_peers()
@@ -1250,3 +1273,16 @@ def startup_cleanup():
             remaining.append(p)
     if len(remaining) != len(peers):
         _save_peers(remaining)
+
+
+def startup_reconnect():
+    if not is_enabled():
+        print("[vipsy.vpn] startup_reconnect: no local VPN enabled flag, skipping", flush=True)
+        return {"ok": True, "message": "Local VPN disabled"}
+    print("[vipsy.vpn] startup_reconnect: restoring local VPN and Cloudflare relay...", flush=True)
+    result = enable()
+    if result.get("ok"):
+        print(f"[vipsy.vpn] startup_reconnect OK: {result.get('message')}", flush=True)
+    else:
+        print(f"[vipsy.vpn] startup_reconnect FAILED: {result.get('error')}", flush=True)
+    return result
