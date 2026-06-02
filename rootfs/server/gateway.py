@@ -484,9 +484,13 @@ def diagnostics():
             lan = ep.get("lan") or "your HA device"
             port = ep.get("port", 51820)
             warnings.append(
-                f"Remote VPN requires port forwarding: forward UDP {port} "
-                f"on your router from {pub} to {lan}"
+                f"Direct WAN VPN requires port forwarding: forward UDP {port} "
+                f"on your router from {pub} to {lan}. Relay ZIP clients do not require this."
             )
+        if not vpn_status.get("relay_ready"):
+            detail = vpn_status.get("relay_error")
+            msg = "Cloudflare VPN relay is not ready - Relay ZIP clients cannot connect"
+            warnings.append(f"{msg}: {detail}" if detail else msg)
 
     try:
         with open("/proc/sys/net/ipv4/ip_forward") as f:

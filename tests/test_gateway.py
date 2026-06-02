@@ -65,6 +65,23 @@ def test_diagnostics():
     assert "count" in data
 
 
+def test_diagnostics_warn_when_cloudflare_vpn_relay_is_not_ready():
+    vpn_state = {
+        "enabled": True,
+        "overlap_warning": None,
+        "relay_ready": False,
+        "relay_error": "listener exited",
+    }
+    with patch.object(gateway.vpn_manager, "status", return_value=vpn_state):
+        with patch.object(gateway.vpn_manager, "_endpoint_info", return_value={"port_forward_needed": False}):
+            resp = _client().get("/api/diagnostics")
+
+    assert resp.status_code == 200
+    warnings = resp.get_json()["warnings"]
+    assert any("Cloudflare VPN relay is not ready" in warning for warning in warnings)
+    assert any("listener exited" in warning for warning in warnings)
+
+
 def test_hub_status_requires_recent_handshake_for_connected_state():
     cfg = {"vpn_ip": "10.100.2.2", "lan_subnet": "192.168.4.0/24"}
     with patch.object(hub_manager, "_load_hub_config", return_value=cfg):

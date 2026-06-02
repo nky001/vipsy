@@ -188,6 +188,19 @@ def test_tunnel_bundle_default_does_not_hijack_dns():
     assert "1.1.1.1/32" not in config
 
 
+def test_tunnel_bundle_routes_wireguard_through_cloudflare_wss_relay():
+    peer = {"privkey": "clientpriv", "vpn_ip": "10.8.0.2"}
+    with patch.object(vpn_manager, "_detect_lan_subnet", return_value="192.168.1.0/24"):
+        with patch.object(vpn_manager, "_subnet", return_value="10.8.0.0/24"):
+            with patch.object(vpn_manager, "_tunnel_url", return_value="https://place1.vipsy.in"):
+                bundle = vpn_manager.get_tunnel_bundle("abc12345", peer, "serverpub")
+    with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
+        config = archive.read("vipsy-tunnel/vipsy-tunnel.conf").decode()
+        relay_script = archive.read("vipsy-tunnel/vipsy-relay.py").decode()
+    assert "Endpoint = 127.0.0.1:51820" in config
+    assert 'WS_URL = "wss://place1.vipsy.in/wg-tunnel"' in relay_script
+
+
 def test_expire_peers():
     with tempfile.TemporaryDirectory() as tmp:
         fake = FakePeersDir(tmp)
@@ -250,6 +263,35 @@ def test_status_when_disabled():
     assert s["interface"] is None
     assert s["peer_count"] == 0
     assert s["nat_active"] is False
+
+
+def test_enable_restores_relay_when_interface_is_already_active():
+    with patch.object(vpn_manager, "_interface_exists", return_value=True):
+        with patch.object(vpn_manager, "_start_ttl_watcher") as start_ttl:
+            with patch.object(vpn_manager, "_start_relay", return_value=True) as start_relay:
+                result = vpn_manager.enable()
+
+    assert result["ok"] is True
+    assert result["message"] == "VPN already enabled"
+    start_ttl.assert_called_once_with()
+    start_relay.assert_called_once_with()
+
+
+def test_status_recovers_missing_relay_for_active_vpn():
+    with patch.object(vpn_manager, "_interface_exists", return_value=True):
+        with patch.object(vpn_manager, "_is_relay_running", side_effect=[False, True]):
+            with patch.object(vpn_manager, "_start_relay", return_value=True) as start_relay:
+                with patch.object(vpn_manager, "_load_peers", return_value=[]):
+                    with patch.object(vpn_manager, "_get_wg_show", return_value={}):
+                        with patch.object(vpn_manager, "_check_subnet_overlap", return_value=None):
+                            with patch.object(vpn_manager, "_detect_lan_subnet", return_value="192.168.1.0/24"):
+                                with patch.object(vpn_manager, "_relay_last_error", None):
+                                    state = vpn_manager.status()
+
+    start_relay.assert_called_once_with()
+    assert state["enabled"] is True
+    assert state["relay_running"] is True
+    assert state["relay_ready"] is True
 
 
 def test_add_peer_vpn_not_enabled():

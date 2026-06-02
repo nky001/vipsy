@@ -294,7 +294,7 @@
       </div>
     </div>
 
-    <section class="section-title">Local VPN <span class="small muted" style="font-weight:400;font-size:.75rem">(same network — requires port forwarding for remote)</span></section>
+    <section class="section-title">WireGuard VPN <span class="small muted" style="font-weight:400;font-size:.75rem">(LAN direct; Relay ZIP works remotely without port forwarding)</span></section>
     <div class="vpn-card {{ 'vpn-card--ok' if vpn.enabled else 'vpn-card--off' }}" id="vpn-card">
       <div class="vpn-card__header">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
@@ -336,6 +336,12 @@
         <div class="access-row">
           <span class="access-label">Peers</span>
           <span class="access-value" id="vpn-peer-count">{{ vpn.peer_count }} total, {{ vpn.connected_count }} connected</span>
+        </div>
+        <div class="access-row">
+          <span class="access-label">Relay ZIP</span>
+          <span class="access-status {{ 'access-status--ok' if vpn.relay_ready else 'access-status--neutral' }}" id="vpn-relay-status">
+            {% if vpn.relay_ready %}✓ Ready - no port forwarding{% else %}○ Recovering{% endif %}
+          </span>
         </div>
         {% if vpn.overlap_warning %}
         <div class="vpn-warning">⚠ {{ vpn.overlap_warning }}</div>
@@ -393,7 +399,7 @@
         <div id="vpn-peer-qr-img" style="text-align:center;margin-top:.5rem"></div>
         <div id="vpn-remote-block" style="display:none;margin-top:.75rem;border-top:1px solid var(--border);padding-top:.75rem">
           <div class="form-group">
-            <label>Remote Config <span class="muted small">(outside network — requires port forwarding)</span></label>
+            <label>Direct WAN Config <span class="muted small">(outside network — requires router port forwarding)</span></label>
             <pre class="setup-code" id="vpn-peer-remote-config-text" style="max-height:180px;overflow:auto"></pre>
           </div>
           <div class="vpn-peer-actions">
@@ -424,7 +430,7 @@
                 <a href="{{ ingress_entry }}/api/vpn/peers/{{ p.peer_id }}/config?network=lan" class="btn btn--sm" title="LAN config">⬇ LAN</a>
                 <a href="{{ ingress_entry }}/api/vpn/peers/{{ p.peer_id }}/config?network=remote" class="btn btn--sm" title="Remote config">⬇ WAN</a>
                 {% if tunnel.url or tunnel.fallback_url %}
-                <a href="{{ ingress_entry }}/api/vpn/peers/{{ p.peer_id }}/tunnel-bundle" class="btn btn--sm btn--blue" title="Cloudflare relay bundle">Relay</a>
+                <a href="{{ ingress_entry }}/api/vpn/peers/{{ p.peer_id }}/tunnel-bundle" class="btn btn--sm btn--blue" title="Cloudflare relay bundle - no port forwarding needed">Relay ZIP</a>
                 {% endif %}
                 <a href="{{ ingress_entry }}/api/vpn/peers/{{ p.peer_id }}/qr?network=lan" class="btn btn--sm" target="_blank" title="LAN QR">◻</a>
                 <button class="btn btn--sm btn--red" onclick="vpnRemovePeer('{{ p.peer_id }}')" title="Remove peer">✕</button>

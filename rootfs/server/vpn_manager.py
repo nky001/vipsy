@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import socket
 import subprocess
 import threading
 import time
@@ -39,6 +40,10 @@ _ttl_thread: threading.Thread | None = None
 _ttl_stop = threading.Event()
 _relay_process: subprocess.Popen | None = None
 WG_RELAY_PORT = 51821
+_RELAY_START_TIMEOUT = 3
+_RELAY_RETRY_DELAY = 30
+_relay_last_error: str | None = None
+_relay_retry_after = 0.0
 
 
 def _subnet():
@@ -497,24 +502,72 @@ def _endpoint_info():
     }
 
 
+def _relay_ready():
+    try:
+        with socket.create_connection(("127.0.0.1", WG_RELAY_PORT), timeout=0.25):
+            return True
+    except OSError:
+        return False
+
+
+def _relay_log_tail():
+    try:
+        log_path = Path(VPN_DATA_DIR) / "relay.log"
+        lines = log_path.read_text(errors="replace").splitlines()
+        return " | ".join(lines[-3:])[-400:]
+    except Exception:
+        return ""
+
+
 def _start_relay():
-    global _relay_process
-    if _relay_process and _relay_process.poll() is None:
-        return
+    global _relay_process, _relay_last_error, _relay_retry_after
+    if _relay_process and _relay_process.poll() is None and _relay_ready():
+        return True
+    if time.monotonic() < _relay_retry_after:
+        return False
+    _stop_relay()
     relay_script = os.path.join(os.path.dirname(__file__), "wg_tunnel_relay.py")
     if not os.path.exists(relay_script):
-        return
+        _relay_last_error = "Relay server script is missing"
+        _relay_retry_after = time.monotonic() + _RELAY_RETRY_DELAY
+        return False
     env = dict(os.environ)
     env["VPN_PORT"] = str(_port())
     env["WG_RELAY_PORT"] = str(WG_RELAY_PORT)
     log_path = os.path.join(VPN_DATA_DIR, "relay.log")
-    log_file = open(log_path, "a")
-    _relay_process = subprocess.Popen(
-        [sys.executable, relay_script],
-        env=env,
-        stdout=log_file,
-        stderr=log_file,
-    )
+    try:
+        _data_dir()
+        log_file = open(log_path, "a")
+        try:
+            _relay_process = subprocess.Popen(
+                [sys.executable, relay_script],
+                env=env,
+                stdout=log_file,
+                stderr=log_file,
+            )
+        finally:
+            log_file.close()
+    except Exception as exc:
+        _relay_process = None
+        _relay_last_error = f"Relay server failed to start: {exc}"
+        _relay_retry_after = time.monotonic() + _RELAY_RETRY_DELAY
+        return False
+
+    deadline = time.monotonic() + _RELAY_START_TIMEOUT
+    while time.monotonic() < deadline:
+        if _relay_ready():
+            _relay_last_error = None
+            _relay_retry_after = 0.0
+            return True
+        if _relay_process.poll() is not None:
+            break
+        time.sleep(0.1)
+
+    detail = _relay_log_tail()
+    _relay_last_error = detail or "Relay server did not open its WebSocket listener"
+    _relay_retry_after = time.monotonic() + _RELAY_RETRY_DELAY
+    _stop_relay()
+    return False
 
 
 def _stop_relay():
@@ -536,9 +589,12 @@ def _is_relay_running():
 
 
 def relay_status():
+    running = _is_relay_running()
     return {
-        "running": _is_relay_running(),
+        "running": running,
+        "ready": running and _relay_last_error is None,
         "port": WG_RELAY_PORT,
+        "error": _relay_last_error,
     }
 
 
@@ -924,7 +980,12 @@ def _stop_ttl_watcher():
 def enable():
     with _lock:
         if _interface_exists():
-            return {"ok": True, "message": "VPN already enabled"}
+            _start_ttl_watcher()
+            relay_ready = _start_relay()
+            result = {"ok": True, "message": "VPN already enabled"}
+            if not relay_ready:
+                result["warning"] = _relay_last_error or "Cloudflare relay is not ready yet"
+            return result
 
         overlap = _check_subnet_overlap()
         privkey, pubkey = _get_or_create_server_keys()
@@ -936,12 +997,15 @@ def enable():
         _apply_nat_rules()
         _restore_peers()
         _start_ttl_watcher()
-        _start_relay()
+        relay_ready = _start_relay()
         _audit("enable", extra={"subnet": subnet, "port": port})
 
         result = {"ok": True, "message": "VPN enabled"}
         if overlap:
             result["warning"] = overlap
+        if not relay_ready:
+            relay_warning = _relay_last_error or "Cloudflare relay is not ready yet"
+            result["warning"] = f"{result['warning']}; {relay_warning}" if result.get("warning") else relay_warning
         return result
 
 
@@ -1144,6 +1208,9 @@ def _get_wg_show():
 
 def status():
     up = _interface_exists()
+    if up and not _is_relay_running():
+        _start_relay()
+    relay = relay_status()
     peers = _load_peers()
     connected = 0
     if up:
@@ -1159,6 +1226,9 @@ def status():
         "peer_count": len(peers),
         "connected_count": connected,
         "nat_active": up,
+        "relay_running": relay["running"],
+        "relay_ready": relay["ready"],
+        "relay_error": relay["error"],
         "lan_subnet": _detect_lan_subnet(),
         "overlap_warning": overlap,
     }

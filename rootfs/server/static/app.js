@@ -340,6 +340,11 @@
         }
         var pc = document.getElementById("vpn-peer-count");
         if (pc) pc.textContent = d.peer_count + " total, " + d.connected_count + " connected";
+        var relay = document.getElementById("vpn-relay-status");
+        if (relay) {
+          relay.textContent = d.relay_ready ? "\u2713 Ready - no port forwarding" : "\u25CB Recovering";
+          relay.className = "access-status " + (d.relay_ready ? "access-status--ok" : "access-status--neutral");
+        }
         var card = document.getElementById("vpn-card");
         if (card) card.className = "vpn-card " + (d.enabled ? "vpn-card--ok" : "vpn-card--off");
       })
@@ -373,7 +378,7 @@
             "<td>" +
             '<a href="' + basePath + "api/vpn/peers/" + p.peer_id + '/config?network=lan" class="btn btn--sm" title="LAN config">\u2B07 LAN</a>' +
             '<a href="' + basePath + "api/vpn/peers/" + p.peer_id + '/config?network=remote" class="btn btn--sm" title="Remote config">\u2B07 WAN</a>' +
-            (_tunnelUrlAvailable ? '<a href="' + basePath + "api/vpn/peers/" + p.peer_id + '/tunnel-bundle" class="btn btn--sm btn--blue" title="Cloudflare relay bundle">Relay</a>' : "") +
+            (_tunnelUrlAvailable ? '<a href="' + basePath + "api/vpn/peers/" + p.peer_id + '/tunnel-bundle" class="btn btn--sm btn--blue" title="Cloudflare relay bundle - no port forwarding needed">Relay ZIP</a>' : "") +
             '<a href="' + basePath + "api/vpn/peers/" + p.peer_id + '/qr?network=lan" class="btn btn--sm" target="_blank" title="LAN QR">\u25FB</a>' +
             '<button class="btn btn--sm btn--red" onclick="vpnRemovePeer(\'' + p.peer_id + '\')" title="Remove peer">\u2715</button>' +
             "</td></tr>";
