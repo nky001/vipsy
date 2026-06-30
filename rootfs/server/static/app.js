@@ -340,6 +340,8 @@
         }
         var pc = document.getElementById("vpn-peer-count");
         if (pc) pc.textContent = d.peer_count + " total, " + d.connected_count + " connected";
+        var routed = document.getElementById("vpn-routed-subnets");
+        if (routed) routed.textContent = (d.routed_subnets || []).join(", ") || d.lan_subnet || "";
         var relay = document.getElementById("vpn-relay-status");
         if (relay) {
           relay.textContent = d.relay_ready ? "\u2713 Ready - no port forwarding" : "\u25CB Recovering";
@@ -496,6 +498,67 @@
         } else {
           alert(d.error || "Failed to remove peer");
         }
+      })
+      .catch(function () { alert("Network error"); });
+  };
+
+  window.vpnAddRoute = function () {
+    var name = ((document.getElementById("vpn-route-name") || {}).value || "").trim();
+    var subnet = ((document.getElementById("vpn-route-subnet") || {}).value || "").trim();
+    if (!subnet) { alert("Subnet is required"); return; }
+    fetch(basePath + "api/vpn/routes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name, subnet: subnet })
+    })
+      .then(function (r) { return r.json().then(function (d) { d._status = r.status; return d; }); })
+      .then(function (d) {
+        if (!d.ok) { alert(d.error || "Failed to add subnet"); return; }
+        location.reload();
+      })
+      .catch(function () { alert("Network error"); });
+  };
+
+  window.vpnRemoveRoute = function (routeId) {
+    if (!confirm("Remove this routed subnet? Re-download peer configs after route changes.")) return;
+    fetch(basePath + "api/vpn/routes/" + encodeURIComponent(routeId), { method: "DELETE" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) location.reload();
+        else alert(d.error || "Failed to remove subnet");
+      })
+      .catch(function () { alert("Network error"); });
+  };
+
+  window.vpnAddPortMap = function () {
+    var body = {
+      name: ((document.getElementById("vpn-portmap-name") || {}).value || "").trim(),
+      protocol: ((document.getElementById("vpn-portmap-protocol") || {}).value || "tcp").trim(),
+      listen_port: parseInt(((document.getElementById("vpn-portmap-listen") || {}).value || "0"), 10),
+      target_ip: ((document.getElementById("vpn-portmap-target-ip") || {}).value || "").trim(),
+      target_port: parseInt(((document.getElementById("vpn-portmap-target-port") || {}).value || "0"), 10)
+    };
+    if (!body.listen_port || !body.target_ip || !body.target_port) { alert("Listen port, target IP, and target port are required"); return; }
+    fetch(basePath + "api/vpn/port-maps", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    })
+      .then(function (r) { return r.json().then(function (d) { d._status = r.status; return d; }); })
+      .then(function (d) {
+        if (!d.ok) { alert(d.error || "Failed to add port map"); return; }
+        location.reload();
+      })
+      .catch(function () { alert("Network error"); });
+  };
+
+  window.vpnRemovePortMap = function (mapId) {
+    if (!confirm("Remove this port map?")) return;
+    fetch(basePath + "api/vpn/port-maps/" + encodeURIComponent(mapId), { method: "DELETE" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) location.reload();
+        else alert(d.error || "Failed to remove port map");
       })
       .catch(function () { alert("Network error"); });
   };

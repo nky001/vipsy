@@ -334,6 +334,10 @@
           <span class="access-value mono">{{ vpn.lan_subnet }}</span>
         </div>
         <div class="access-row">
+          <span class="access-label">Routed Subnets</span>
+          <span class="access-value mono" id="vpn-routed-subnets">{{ vpn.routed_subnets|join(', ') if vpn.routed_subnets else vpn.lan_subnet }}</span>
+        </div>
+        <div class="access-row">
           <span class="access-label">Peers</span>
           <span class="access-value" id="vpn-peer-count">{{ vpn.peer_count }} total, {{ vpn.connected_count }} connected</span>
         </div>
@@ -360,6 +364,49 @@
     </div>
 
     {% if vpn.enabled %}
+    <div class="card">
+      <h2>Extra Subnet Access</h2>
+      <div class="small muted" style="margin-bottom:.75rem">Add private subnets reachable from this Home Assistant host, for example another VLAN like <code>192.168.20.0/24</code>. Re-download peer configs after changing routes.</div>
+      <div id="vpn-routes-list">
+        {% for route in vpn.extra_subnets %}
+        <div class="access-row" id="vpn-route-{{ route.id }}">
+          <span class="access-label">{{ route.name }}</span>
+          <span class="access-value mono">{{ route.subnet }} <button class="btn btn--sm btn--red" onclick="vpnRemoveRoute('{{ route.id }}')">Remove</button></span>
+        </div>
+        {% else %}
+        <div class="small muted" id="vpn-routes-empty">No extra subnets configured.</div>
+        {% endfor %}
+      </div>
+      <div class="vpn-peer-actions" style="margin-top:.75rem;flex-wrap:wrap">
+        <input type="text" id="vpn-route-name" class="form-input" placeholder="Name, e.g. CCTV VLAN" style="max-width:180px">
+        <input type="text" id="vpn-route-subnet" class="form-input" placeholder="192.168.20.0/24" style="max-width:180px">
+        <button class="btn btn--sm btn--blue" onclick="vpnAddRoute()">Add Subnet</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Port Maps</h2>
+      <div class="small muted" style="margin-bottom:.75rem">Expose a target device as <code>this HA IP:unique_port</code> for LAN or WireGuard clients, for example <code>:18080 -> 192.168.20.50:80</code>.</div>
+      <div id="vpn-portmaps-list">
+        {% for item in vpn.port_maps %}
+        <div class="access-row" id="vpn-portmap-{{ item.id }}">
+          <span class="access-label">{{ item.name }}</span>
+          <span class="access-value mono">{{ item.protocol }}/{{ item.listen_port }} -> {{ item.target_ip }}:{{ item.target_port }} <button class="btn btn--sm btn--red" onclick="vpnRemovePortMap('{{ item.id }}')">Remove</button></span>
+        </div>
+        {% else %}
+        <div class="small muted" id="vpn-portmaps-empty">No port maps configured.</div>
+        {% endfor %}
+      </div>
+      <div class="vpn-peer-actions" style="margin-top:.75rem;flex-wrap:wrap">
+        <input type="text" id="vpn-portmap-name" class="form-input" placeholder="Name" style="max-width:140px">
+        <select id="vpn-portmap-protocol" class="form-input" style="max-width:90px"><option value="tcp">TCP</option><option value="udp">UDP</option><option value="both">Both</option></select>
+        <input type="number" id="vpn-portmap-listen" class="form-input" placeholder="Listen" min="1024" max="65535" style="max-width:105px">
+        <input type="text" id="vpn-portmap-target-ip" class="form-input" placeholder="Target IP" style="max-width:140px">
+        <input type="number" id="vpn-portmap-target-port" class="form-input" placeholder="Target port" min="1" max="65535" style="max-width:115px">
+        <button class="btn btn--sm btn--blue" onclick="vpnAddPortMap()">Add Map</button>
+      </div>
+    </div>
+
     <div class="vpn-peers-section">
       <div class="vpn-peers-header">
         <span class="section-title" style="margin:0">Peers</span>

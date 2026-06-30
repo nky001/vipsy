@@ -44,6 +44,7 @@ _RELAY_START_TIMEOUT = 3
 _RELAY_RETRY_DELAY = 30
 _relay_last_error: str | None = None
 _relay_retry_after = 0.0
+_VPN_PORTMAP_COMMENT = "vipsy-vpn-portmap"
 
 
 def _subnet():
@@ -87,6 +88,37 @@ def _peers_path():
 
 def _audit_path():
     return Path(VPN_AUDIT_LOG)
+
+
+def _extra_subnets_path():
+    return _data_dir() / "extra_subnets.json"
+
+
+def _port_maps_path():
+    return _data_dir() / "port_maps.json"
+
+
+def _load_json_list(path):
+    try:
+        if path.exists():
+            data = json.loads(path.read_text())
+            if isinstance(data, list):
+                return data
+    except (json.JSONDecodeError, OSError):
+        pass
+    return []
+
+
+def _save_json_list(path, items):
+    _data_dir()
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(items, indent=2))
+    tmp.chmod(0o600)
+    tmp.replace(path)
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
 
 
 def _run(cmd, check=True, capture=True):
@@ -249,13 +281,13 @@ def _detect_lan_subnet():
 
 def _check_subnet_overlap():
     vpn_net = _network()
-    lan_str = _detect_lan_subnet()
-    try:
-        lan_net = ipaddress.IPv4Network(lan_str, strict=False)
-        if vpn_net.overlaps(lan_net):
-            return f"VPN subnet {vpn_net} overlaps with LAN {lan_net}"
-    except ValueError:
-        pass
+    for lan_str in _routed_subnets(include_vpn=False):
+        try:
+            lan_net = ipaddress.IPv4Network(lan_str, strict=False)
+            if vpn_net.overlaps(lan_net):
+                return f"VPN subnet {vpn_net} overlaps with routed subnet {lan_net}"
+        except ValueError:
+            pass
     return None
 
 
@@ -263,6 +295,204 @@ _log = logging.getLogger("vipsy.vpn")
 
 _VPN_NFT_COMMENT = "vipsy-vpn"
 _NFT_FAMILY = "ip"
+
+
+def _clean_name(value, default="Route"):
+    name = re.sub(r"\s+", " ", (value or "").strip())
+    name = re.sub(r"[^A-Za-z0-9 _.\-]", "", name).strip()
+    return (name or default)[:64]
+
+
+def _private_subnet(value):
+    try:
+        net = ipaddress.IPv4Network((value or "").strip(), strict=False)
+    except ValueError:
+        return None
+    if net.prefixlen < 8 or net.prefixlen > 32:
+        return None
+    if net.is_loopback or net.is_multicast or net.is_link_local or net.is_unspecified:
+        return None
+    if not net.is_private:
+        return None
+    return net
+
+
+def _private_ip(value):
+    try:
+        ip = ipaddress.IPv4Address((value or "").strip())
+    except ValueError:
+        return None
+    if ip.is_loopback or ip.is_multicast or ip.is_link_local or ip.is_unspecified:
+        return None
+    if not ip.is_private:
+        return None
+    return ip
+
+
+def _valid_port(value):
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        return None
+    return port if 1 <= port <= 65535 else None
+
+
+def _reserved_listen_ports():
+    return {_port(), WG_RELAY_PORT, 443, 3478, 18099}
+
+
+def list_extra_subnets():
+    subnets = []
+    seen = set()
+    changed = False
+    for item in _load_json_list(_extra_subnets_path()):
+        net = _private_subnet(item.get("subnet") if isinstance(item, dict) else None)
+        if not net:
+            changed = True
+            continue
+        subnet = str(net)
+        if subnet in seen:
+            changed = True
+            continue
+        seen.add(subnet)
+        subnets.append({
+            "id": (item.get("id") or uuid.uuid4().hex[:8])[:16],
+            "name": _clean_name(item.get("name"), subnet),
+            "subnet": subnet,
+            "created_at": item.get("created_at") or datetime.now(timezone.utc).isoformat(),
+        })
+    if changed:
+        _save_json_list(_extra_subnets_path(), subnets)
+    return subnets
+
+
+def _routed_subnets(include_vpn=True):
+    routes = [_detect_lan_subnet()]
+    routes.extend(item["subnet"] for item in list_extra_subnets())
+    if include_vpn:
+        routes.append(_subnet())
+    out = []
+    seen = set()
+    for route in routes:
+        net = _private_subnet(route)
+        if not net:
+            continue
+        value = str(net)
+        if value not in seen:
+            seen.add(value)
+            out.append(value)
+    return out
+
+
+def add_extra_subnet(subnet, name=""):
+    net = _private_subnet(subnet)
+    if not net:
+        return {"ok": False, "error": "Enter a private IPv4 subnet like 192.168.20.0/24"}
+    if net.overlaps(_network()):
+        return {"ok": False, "error": "Extra subnet cannot overlap the WireGuard VPN subnet"}
+    routes = list_extra_subnets()
+    if str(net) == str(_private_subnet(_detect_lan_subnet())) or any(item["subnet"] == str(net) for item in routes):
+        return {"ok": False, "error": "Subnet is already routed"}
+    item = {
+        "id": uuid.uuid4().hex[:8],
+        "name": _clean_name(name, str(net)),
+        "subnet": str(net),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    routes.append(item)
+    _save_json_list(_extra_subnets_path(), routes)
+    _audit("add_route", extra={"subnet": item["subnet"], "name": item["name"]})
+    return {"ok": True, "route": item, "routes": routes}
+
+
+def remove_extra_subnet(route_id):
+    routes = list_extra_subnets()
+    kept = [item for item in routes if item["id"] != route_id]
+    if len(kept) == len(routes):
+        return {"ok": False, "error": "Route not found"}
+    _save_json_list(_extra_subnets_path(), kept)
+    _audit("remove_route", extra={"route_id": route_id})
+    return {"ok": True, "routes": kept}
+
+
+def list_port_maps():
+    maps = []
+    used = set()
+    changed = False
+    for item in _load_json_list(_port_maps_path()):
+        if not isinstance(item, dict):
+            changed = True
+            continue
+        protocol = str(item.get("protocol") or "tcp").lower()
+        if protocol not in {"tcp", "udp", "both"}:
+            changed = True
+            continue
+        listen_port = _valid_port(item.get("listen_port"))
+        target_port = _valid_port(item.get("target_port"))
+        target_ip = _private_ip(item.get("target_ip"))
+        if not listen_port or not target_port or not target_ip:
+            changed = True
+            continue
+        key = (protocol, listen_port)
+        if key in used:
+            changed = True
+            continue
+        used.add(key)
+        maps.append({
+            "id": (item.get("id") or uuid.uuid4().hex[:8])[:16],
+            "name": _clean_name(item.get("name"), f"{listen_port} to {target_ip}:{target_port}"),
+            "protocol": protocol,
+            "listen_port": listen_port,
+            "target_ip": str(target_ip),
+            "target_port": target_port,
+            "created_at": item.get("created_at") or datetime.now(timezone.utc).isoformat(),
+        })
+    if changed:
+        _save_json_list(_port_maps_path(), maps)
+    return maps
+
+
+def add_port_map(name, protocol, listen_port, target_ip, target_port):
+    proto = str(protocol or "tcp").lower()
+    if proto not in {"tcp", "udp", "both"}:
+        return {"ok": False, "error": "Protocol must be tcp, udp, or both"}
+    listen = _valid_port(listen_port)
+    target = _valid_port(target_port)
+    ip = _private_ip(target_ip)
+    if not listen or not target or not ip:
+        return {"ok": False, "error": "Enter a private target IP and valid ports"}
+    if listen in _reserved_listen_ports() or listen < 1024:
+        return {"ok": False, "error": "Listen port must be an unused high port"}
+    maps = list_port_maps()
+    if any(m["listen_port"] == listen and (m["protocol"] == proto or "both" in {m["protocol"], proto}) for m in maps):
+        return {"ok": False, "error": "That listen port/protocol is already mapped"}
+    item = {
+        "id": uuid.uuid4().hex[:8],
+        "name": _clean_name(name, f"{listen} to {ip}:{target}"),
+        "protocol": proto,
+        "listen_port": listen,
+        "target_ip": str(ip),
+        "target_port": target,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    maps.append(item)
+    _save_json_list(_port_maps_path(), maps)
+    if _interface_exists():
+        _apply_port_map_rules()
+    _audit("add_port_map", extra=item)
+    return {"ok": True, "map": item, "maps": maps}
+
+
+def remove_port_map(map_id):
+    maps = list_port_maps()
+    kept = [item for item in maps if item["id"] != map_id]
+    if len(kept) == len(maps):
+        return {"ok": False, "error": "Port map not found"}
+    _save_json_list(_port_maps_path(), kept)
+    if _interface_exists():
+        _apply_port_map_rules()
+    _audit("remove_port_map", extra={"map_id": map_id})
+    return {"ok": True, "maps": kept}
 
 
 def _nft_cmd(*args):
@@ -278,7 +508,7 @@ def _nft_cmd(*args):
 
 
 def _remove_nft_rules_by_comment(comment):
-    for tbl, chains in [("filter", ["DOCKER-USER", "FORWARD"]), ("nat", ["POSTROUTING"])]:
+    for tbl, chains in [("filter", ["DOCKER-USER", "FORWARD"]), ("nat", ["PREROUTING", "OUTPUT", "POSTROUTING"])]:
         for chain_name in chains:
             try:
                 r = subprocess.run(
@@ -314,6 +544,35 @@ def _inject_docker_rules(iface, comment, vpn_subnet):
     results.append(ok_nat)
     print(f"[vipsy.vpn] POSTROUTING masquerade: {ok_nat}", flush=True)
     return any(results)
+
+
+def _protocols_for_map(item):
+    return ("tcp", "udp") if item["protocol"] == "both" else (item["protocol"],)
+
+
+def _apply_port_map_rules():
+    _remove_nft_rules_by_comment(_VPN_PORTMAP_COMMENT)
+    maps = list_port_maps()
+    if not maps:
+        return True
+    ok = True
+    for item in maps:
+        for proto in _protocols_for_map(item):
+            listen = str(item["listen_port"])
+            target = f"{item['target_ip']}:{item['target_port']}"
+            ok = _nft_cmd("add", "rule", _NFT_FAMILY, "nat", "PREROUTING",
+                          proto, "dport", listen, "dnat", "to", target,
+                          "comment", f'"{_VPN_PORTMAP_COMMENT}"') and ok
+            ok = _nft_cmd("add", "rule", _NFT_FAMILY, "nat", "OUTPUT",
+                          proto, "dport", listen, "dnat", "to", target,
+                          "comment", f'"{_VPN_PORTMAP_COMMENT}"') and ok
+            ok = _nft_cmd("insert", "rule", _NFT_FAMILY, "filter", "FORWARD",
+                          "ip", "daddr", item["target_ip"], proto, "dport", str(item["target_port"]),
+                          "counter", "accept", "comment", f'"{_VPN_PORTMAP_COMMENT}"') and ok
+            ok = _nft_cmd("add", "rule", _NFT_FAMILY, "nat", "POSTROUTING",
+                          "ip", "daddr", item["target_ip"], proto, "dport", str(item["target_port"]),
+                          "masquerade", "comment", f'"{_VPN_PORTMAP_COMMENT}"') and ok
+    return ok
 
 
 def _interface_exists():
@@ -368,7 +627,9 @@ def _apply_nat_rules():
     _log.info("apply VPN NAT: subnet=%s lan=%s iface=%s", subnet, lan, VPN_INTERFACE)
 
     ok = _inject_docker_rules(VPN_INTERFACE, _VPN_NFT_COMMENT, subnet)
+    portmap_ok = _apply_port_map_rules()
     _log.info("rules injected: %s", ok)
+    _log.info("port maps injected: %s", portmap_ok)
 
     for lbl, cmd in [
         ("DOCKER-USER", ["nft", "list", "chain", _NFT_FAMILY, "filter", "DOCKER-USER"]),
@@ -388,6 +649,7 @@ def _apply_nat_rules():
 def _flush_nat_rules():
     _log.info("flushing VPN NAT")
     _remove_nft_rules_by_comment(_VPN_NFT_COMMENT)
+    _remove_nft_rules_by_comment(_VPN_PORTMAP_COMMENT)
 
 
 def _create_interface(privkey, port, server_ip, subnet):
@@ -447,9 +709,8 @@ def _restore_peers():
 
 
 def _generate_client_config(peer, server_pubkey, endpoint, dns=None):
-    lan = _detect_lan_subnet()
     subnet = _subnet()
-    allowed_ips = f"{lan}, {subnet}"
+    allowed_ips = ", ".join(_routed_subnets(include_vpn=True))
     lines = [
         "[Interface]",
         f"PrivateKey = {peer['privkey']}",
@@ -831,9 +1092,8 @@ def get_tunnel_bundle(peer_id, peer, server_pubkey, dns=None):
         return None
     ws_url = turl.rstrip("/").replace("https://", "wss://").replace("http://", "ws://") + "/wg-tunnel"
     relay_script = get_relay_client_script(ws_url)
-    lan = _detect_lan_subnet()
     subnet = _subnet()
-    allowed_ips = f"{lan}, {subnet}"
+    allowed_ips = ", ".join(_routed_subnets(include_vpn=True))
     prefix = _network(subnet).prefixlen
     port = _port()
     conf_lines = [
@@ -1251,6 +1511,9 @@ def status():
         "relay_ready": relay["ready"],
         "relay_error": relay["error"],
         "lan_subnet": _detect_lan_subnet(),
+        "routed_subnets": _routed_subnets(include_vpn=False),
+        "extra_subnets": list_extra_subnets(),
+        "port_maps": list_port_maps(),
         "overlap_warning": overlap,
     }
 

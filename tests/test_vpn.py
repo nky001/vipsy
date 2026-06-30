@@ -174,6 +174,70 @@ def test_generate_client_config_keeps_explicit_dns_opt_in():
     assert "DNS = 192.168.1.1" in config
 
 
+def test_extra_subnet_is_added_to_client_allowed_ips():
+    peer = {"privkey": "clientpriv", "vpn_ip": "10.8.0.2"}
+    with tempfile.TemporaryDirectory() as tmp:
+        fake = FakePeersDir(tmp)
+        patches = _apply_patches(fake)
+        try:
+            added = vpn_manager.add_extra_subnet("192.168.20.0/24", "CCTV")
+            assert added["ok"] is True
+            with patch.object(vpn_manager, "_detect_lan_subnet", return_value="192.168.1.0/24"):
+                with patch.object(vpn_manager, "_subnet", return_value="10.8.0.0/24"):
+                    config = vpn_manager._generate_client_config(peer, "serverpub", "1.2.3.4")
+        finally:
+            _stop_patches(patches)
+    assert "AllowedIPs = 192.168.1.0/24, 192.168.20.0/24, 10.8.0.0/24" in config
+
+
+def test_extra_subnet_rejects_public_or_duplicate_subnet():
+    with tempfile.TemporaryDirectory() as tmp:
+        fake = FakePeersDir(tmp)
+        patches = _apply_patches(fake)
+        try:
+            assert vpn_manager.add_extra_subnet("8.8.8.0/24")["ok"] is False
+            assert vpn_manager.add_extra_subnet("192.168.20.0/24")["ok"] is True
+            assert vpn_manager.add_extra_subnet("192.168.20.0/24")["ok"] is False
+        finally:
+            _stop_patches(patches)
+
+
+def test_port_map_validation_and_remove():
+    with tempfile.TemporaryDirectory() as tmp:
+        fake = FakePeersDir(tmp)
+        patches = _apply_patches(fake)
+        try:
+            with patch.object(vpn_manager, "_interface_exists", return_value=False):
+                assert vpn_manager.add_port_map("bad", "tcp", 80, "192.168.20.10", 80)["ok"] is False
+                added = vpn_manager.add_port_map("camera", "tcp", 18080, "192.168.20.10", 80)
+            assert added["ok"] is True
+            assert len(vpn_manager.list_port_maps()) == 1
+            with patch.object(vpn_manager, "_interface_exists", return_value=False):
+                removed = vpn_manager.remove_port_map(added["map"]["id"])
+            assert removed["ok"] is True
+            assert vpn_manager.list_port_maps() == []
+        finally:
+            _stop_patches(patches)
+
+
+def test_apply_port_map_rules_creates_dnat_and_masquerade_rules():
+    with tempfile.TemporaryDirectory() as tmp:
+        fake = FakePeersDir(tmp)
+        patches = _apply_patches(fake)
+        calls = []
+        try:
+            with patch.object(vpn_manager, "_interface_exists", return_value=False):
+                vpn_manager.add_port_map("cam", "tcp", 18080, "192.168.20.10", 80)
+            with patch.object(vpn_manager, "_remove_nft_rules_by_comment"):
+                with patch.object(vpn_manager, "_nft_cmd", side_effect=lambda *args: calls.append(args) or True):
+                    assert vpn_manager._apply_port_map_rules() is True
+        finally:
+            _stop_patches(patches)
+    joined = [" ".join(call) for call in calls]
+    assert any("nat PREROUTING tcp dport 18080 dnat to 192.168.20.10:80" in call for call in joined)
+    assert any("nat POSTROUTING ip daddr 192.168.20.10 tcp dport 80 masquerade" in call for call in joined)
+
+
 def test_tunnel_bundle_default_does_not_hijack_dns():
     peer = {"privkey": "clientpriv", "vpn_ip": "10.8.0.2"}
     with patch.object(vpn_manager, "_detect_lan_subnet", return_value="192.168.1.0/24"):

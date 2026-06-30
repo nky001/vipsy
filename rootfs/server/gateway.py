@@ -22,6 +22,7 @@ from flask import Flask, jsonify, render_template, request, redirect
 import threading
 
 _PEER_ID_RE = re.compile(r'^[0-9a-f]{8}$')
+_VPN_ITEM_ID_RE = re.compile(r'^[0-9a-f]{8,16}$')
 _INSTANCE_NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$')
 import tunnel_manager
 import vpn_manager
@@ -663,6 +664,52 @@ def vpn_kill():
 @app.route("/api/vpn/peers", methods=["GET"])
 def vpn_peers_list():
     return jsonify(peers=vpn_manager.list_peers())
+
+
+@app.route("/api/vpn/routes", methods=["GET"])
+def vpn_routes_list():
+    return jsonify(ok=True, routes=vpn_manager.list_extra_subnets())
+
+
+@app.route("/api/vpn/routes", methods=["POST"])
+def vpn_routes_add():
+    data = request.get_json(silent=True) or {}
+    result = vpn_manager.add_extra_subnet(data.get("subnet", ""), data.get("name", ""))
+    return jsonify(result), 201 if result.get("ok") else 400
+
+
+@app.route("/api/vpn/routes/<route_id>", methods=["DELETE"])
+def vpn_routes_delete(route_id):
+    if not _VPN_ITEM_ID_RE.match(route_id):
+        return jsonify(ok=False, error="Invalid route ID"), 400
+    result = vpn_manager.remove_extra_subnet(route_id)
+    return jsonify(result), 200 if result.get("ok") else 404
+
+
+@app.route("/api/vpn/port-maps", methods=["GET"])
+def vpn_port_maps_list():
+    return jsonify(ok=True, maps=vpn_manager.list_port_maps())
+
+
+@app.route("/api/vpn/port-maps", methods=["POST"])
+def vpn_port_maps_add():
+    data = request.get_json(silent=True) or {}
+    result = vpn_manager.add_port_map(
+        data.get("name", ""),
+        data.get("protocol", "tcp"),
+        data.get("listen_port"),
+        data.get("target_ip", ""),
+        data.get("target_port"),
+    )
+    return jsonify(result), 201 if result.get("ok") else 400
+
+
+@app.route("/api/vpn/port-maps/<map_id>", methods=["DELETE"])
+def vpn_port_maps_delete(map_id):
+    if not _VPN_ITEM_ID_RE.match(map_id):
+        return jsonify(ok=False, error="Invalid port map ID"), 400
+    result = vpn_manager.remove_port_map(map_id)
+    return jsonify(result), 200 if result.get("ok") else 404
 
 
 @app.route("/api/vpn/peers", methods=["POST"])

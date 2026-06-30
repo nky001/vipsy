@@ -339,3 +339,35 @@ def test_wireguard_downloads_use_friendly_instance_name():
     assert "filename=vipsy-place1-abc12345-lan.conf" in vpn_resp.headers["Content-Disposition"]
     assert "filename=vipsy-place1-abc12345-relay.zip" in relay_resp.headers["Content-Disposition"]
     assert "filename=vipsy-place1-abc12345-remote.conf" in hub_resp.headers["Content-Disposition"]
+
+
+def test_vpn_routes_api_add_and_remove():
+    route = {"id": "abcd1234", "subnet": "192.168.20.0/24", "name": "CCTV"}
+    with patch.object(gateway.vpn_manager, "add_extra_subnet", return_value={"ok": True, "route": route}) as add_route:
+        add_resp = _client().post("/api/vpn/routes", json={"name": "CCTV", "subnet": "192.168.20.0/24"})
+    with patch.object(gateway.vpn_manager, "remove_extra_subnet", return_value={"ok": True, "routes": []}) as remove_route:
+        del_resp = _client().delete("/api/vpn/routes/abcd1234")
+
+    assert add_resp.status_code == 201
+    assert del_resp.status_code == 200
+    add_route.assert_called_once_with("192.168.20.0/24", "CCTV")
+    remove_route.assert_called_once_with("abcd1234")
+
+
+def test_vpn_port_maps_api_add_and_remove():
+    mapping = {"id": "deadbeef", "protocol": "tcp", "listen_port": 18080, "target_ip": "192.168.20.10", "target_port": 80}
+    with patch.object(gateway.vpn_manager, "add_port_map", return_value={"ok": True, "map": mapping}) as add_map:
+        add_resp = _client().post("/api/vpn/port-maps", json={
+            "name": "Camera",
+            "protocol": "tcp",
+            "listen_port": 18080,
+            "target_ip": "192.168.20.10",
+            "target_port": 80,
+        })
+    with patch.object(gateway.vpn_manager, "remove_port_map", return_value={"ok": True, "maps": []}) as remove_map:
+        del_resp = _client().delete("/api/vpn/port-maps/deadbeef")
+
+    assert add_resp.status_code == 201
+    assert del_resp.status_code == 200
+    add_map.assert_called_once_with("Camera", "tcp", 18080, "192.168.20.10", 80)
+    remove_map.assert_called_once_with("deadbeef")
