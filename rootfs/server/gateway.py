@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s", force=Tr
 logging.getLogger("vipsy").setLevel(logging.INFO)
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
-from flask import Flask, jsonify, render_template, request, redirect
+from flask import Flask, jsonify, render_template, request, redirect, Response
 
 import threading
 
@@ -39,6 +39,8 @@ HTTPS_HOST_PORT = int(os.environ.get("HTTPS_HOST_PORT", 443))
 AUTH_TOKEN_PATH = Path("/data/auth_token")
 DEFAULT_BACKEND_URL = "https://api.vipsy.in"
 BACKEND_URL = os.environ.get("VIPSY_BACKEND_URL", DEFAULT_BACKEND_URL).strip()
+CAMERA_MJPEG_INTERVAL = float(os.environ.get("VIPSY_CAMERA_MJPEG_INTERVAL", "1.0"))
+CAMERA_MJPEG_BOUNDARY = "vipsyframe"
 
 
 def load_options():
@@ -235,6 +237,54 @@ def _validate_dns_upstream(value):
     if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", value):
         return True
     return False
+
+
+def _camera_still_url(entity_id):
+    pairs = [(key, value) for key, value in request.args.items(multi=True) if key != "authSig"]
+    if not any(key == "token" for key, _ in pairs):
+        return None
+    if not any(key == "width" for key, _ in pairs):
+        pairs.append(("width", "1280"))
+    if not any(key == "height" for key, _ in pairs):
+        pairs.append(("height", "0"))
+    query = urllib.parse.urlencode(pairs, doseq=True)
+    return f"http://{HA_CORE_HOST}:{HA_CORE_PORT}/api/camera_proxy/{entity_id}?{query}"
+
+
+def _fetch_camera_still(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "vipsy-camera-stream/1.0"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return resp.read(), resp.headers.get("Content-Type", "image/jpeg")
+
+
+def _mjpeg_camera_stream(entity_id):
+    still_url = _camera_still_url(entity_id)
+    if not still_url:
+        return Response("Camera token unavailable", status=401, mimetype="text/plain")
+
+    def generate():
+        while True:
+            try:
+                frame, content_type = _fetch_camera_still(still_url)
+                yield (
+                    f"--{CAMERA_MJPEG_BOUNDARY}\r\n"
+                    f"Content-Type: {content_type}\r\n"
+                    f"Content-Length: {len(frame)}\r\n\r\n"
+                ).encode()
+                yield frame
+                yield b"\r\n"
+                time.sleep(max(CAMERA_MJPEG_INTERVAL, 0.25))
+            except GeneratorExit:
+                return
+            except Exception as exc:
+                print(f"[vipsy.camera] still fetch failed for {entity_id}: {exc}", flush=True)
+                time.sleep(max(CAMERA_MJPEG_INTERVAL, 0.25))
+
+    return Response(
+        generate(),
+        mimetype=f"multipart/x-mixed-replace; boundary={CAMERA_MJPEG_BOUNDARY}",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 _access_cache: dict = {}
@@ -702,6 +752,11 @@ def vpn_port_maps_add():
         data.get("target_port"),
     )
     return jsonify(result), 201 if result.get("ok") else 400
+
+
+@app.route("/api/camera_proxy_stream/<path:entity_id>")
+def camera_proxy_stream(entity_id):
+    return _mjpeg_camera_stream(entity_id)
 
 
 @app.route("/api/vpn/port-maps/<map_id>", methods=["DELETE"])

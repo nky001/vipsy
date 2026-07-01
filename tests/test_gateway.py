@@ -1,6 +1,7 @@
 import os
 import sys
 from unittest.mock import patch, MagicMock
+from io import BytesIO
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "rootfs", "server")))
 
@@ -371,3 +372,59 @@ def test_vpn_port_maps_api_add_and_remove():
     assert del_resp.status_code == 200
     add_map.assert_called_once_with("Camera", "tcp", 18080, "192.168.20.10", 80)
     remove_map.assert_called_once_with("deadbeef")
+
+
+def test_camera_still_url_uses_stream_token_and_drops_authsig():
+    with app.test_request_context(
+        "/api/camera_proxy_stream/camera.192_168_7_130"
+        "?token=abc&authSig=expired"
+    ):
+        url = gateway._camera_still_url("camera.192_168_7_130")
+
+    assert url == (
+        "http://homeassistant:8123/api/camera_proxy/camera.192_168_7_130"
+        "?token=abc&width=1280&height=0"
+    )
+
+
+class FakeStillResponse:
+    headers = {"Content-Type": "image/jpeg"}
+
+    def __init__(self, body=b"jpeg"):
+        self._body = BytesIO(body)
+
+    def read(self):
+        return self._body.read()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+
+def test_camera_proxy_stream_serves_mjpeg_from_stills():
+    calls = {"count": 0}
+
+    def fake_urlopen(req, timeout=0):
+        calls["count"] += 1
+        if calls["count"] > 1:
+            raise GeneratorExit
+        assert req.full_url == (
+            "http://homeassistant:8123/api/camera_proxy/camera.192_168_7_130"
+            "?token=abc&width=1280&height=0"
+        )
+        assert timeout == 15
+        return FakeStillResponse()
+
+    with patch.object(gateway.urllib.request, "urlopen", side_effect=fake_urlopen):
+        with patch.object(gateway.time, "sleep", return_value=None):
+            with app.test_request_context("/api/camera_proxy_stream/camera.192_168_7_130?token=abc"):
+                resp = gateway.camera_proxy_stream("camera.192_168_7_130")
+                chunks = [next(resp.response), next(resp.response), next(resp.response)]
+                resp.response.close()
+
+    assert resp.status_code == 200
+    assert resp.mimetype == "multipart/x-mixed-replace"
+    assert b"Content-Type: image/jpeg" in b"".join(chunks)
+    assert b"jpeg" in b"".join(chunks)
