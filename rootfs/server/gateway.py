@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s", force=Tr
 logging.getLogger("vipsy").setLevel(logging.INFO)
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
-from flask import Flask, jsonify, render_template, request, redirect
+from flask import Flask, jsonify, render_template, request, redirect, Response
 
 import threading
 
@@ -39,6 +39,8 @@ HTTPS_HOST_PORT = int(os.environ.get("HTTPS_HOST_PORT", 443))
 AUTH_TOKEN_PATH = Path("/data/auth_token")
 DEFAULT_BACKEND_URL = "https://api.vipsy.in"
 BACKEND_URL = os.environ.get("VIPSY_BACKEND_URL", DEFAULT_BACKEND_URL).strip()
+HA_CAMERA_PROXY_BASE = os.environ.get("HA_CAMERA_PROXY_BASE", "http://supervisor/core/api").rstrip("/")
+SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 
 
 def load_options():
@@ -237,6 +239,49 @@ def _validate_dns_upstream(value):
     return False
 
 
+def _camera_proxy_url(path):
+    pairs = [
+        (key, value)
+        for key, value in request.args.items(multi=True)
+        if key != "authSig"
+    ]
+    query = urllib.parse.urlencode(pairs, doseq=True)
+    url = f"{HA_CAMERA_PROXY_BASE}{path}"
+    return f"{url}?{query}" if query else url
+
+
+def _camera_proxy_response(path):
+    if not SUPERVISOR_TOKEN:
+        return Response("Supervisor token unavailable", status=502, mimetype="text/plain")
+    req = urllib.request.Request(
+        _camera_proxy_url(path),
+        headers={
+            "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
+            "User-Agent": "vipsy-camera-proxy/1.0",
+            "Accept": request.headers.get("Accept", "*/*"),
+        },
+        method="GET",
+    )
+    try:
+        upstream = urllib.request.urlopen(req, timeout=60)
+    except urllib.error.HTTPError as exc:
+        body = exc.read()
+        return Response(body, status=exc.code, content_type=exc.headers.get("Content-Type", "text/plain"))
+    except OSError as exc:
+        return Response(str(exc), status=502, mimetype="text/plain")
+
+    content_type = upstream.headers.get("Content-Type", "application/octet-stream")
+
+    def generate():
+        try:
+            while chunk := upstream.read(65536):
+                yield chunk
+        finally:
+            upstream.close()
+
+    return Response(generate(), status=upstream.status, content_type=content_type)
+
+
 _access_cache: dict = {}
 _ACCESS_TTL = 60
 
@@ -355,6 +400,16 @@ app = Flask(
     template_folder=os.path.join(os.path.dirname(__file__), "templates"),
     static_folder=os.path.join(os.path.dirname(__file__), "static"),
 )
+
+
+@app.route("/api/camera_proxy/<path:entity_id>")
+def camera_proxy_image(entity_id):
+    return _camera_proxy_response(f"/api/camera_proxy/{entity_id}")
+
+
+@app.route("/api/camera_proxy_stream/<path:entity_id>")
+def camera_proxy_stream(entity_id):
+    return _camera_proxy_response(f"/api/camera_proxy_stream/{entity_id}")
 
 
 @app.route("/")

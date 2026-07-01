@@ -24,6 +24,13 @@
 		flush_interval -1
 	}
 
+	@ha_camera_proxy {
+		path /api/camera_proxy* /api/camera_proxy_stream*
+	}
+	reverse_proxy @ha_camera_proxy 127.0.0.1:18099 {
+		flush_interval -1
+	}
+
 	@ha_webrtc {
 		path /api/webrtc*
 	}
