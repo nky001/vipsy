@@ -79,11 +79,13 @@ def _downgrade_capabilities_if_needed(
         if ENABLE_GENERIC_CAMERA_FALLBACK and entity_id and _is_generic_camera(entity_id, camera_meta) and isinstance(result, dict):
             stream_types = result.get("frontend_stream_types")
             if isinstance(stream_types, list):
-                keys = {_stream_type_key(item) for item in stream_types}
-                if keys & (WEBRTC_TYPES | HLS_TYPES):
-                    result["frontend_stream_types"] = []
-                    print(f"[vipsy.ws] forcing MJPEG camera fallback for {entity_id}", flush=True)
-                    return json.dumps(data, separators=(",", ":"))
+                result["frontend_stream_types"] = []
+                print(
+                    f"[vipsy.ws] forcing MJPEG camera fallback for {entity_id}; "
+                    f"original_stream_types={stream_types}",
+                    flush=True,
+                )
+                return json.dumps(data, separators=(",", ":"))
     elif isinstance(data, dict):
         event = data.get("event")
         if isinstance(event, dict):
@@ -101,6 +103,13 @@ async def _client_to_ha(client_ws, ha_ws, pending_capabilities: dict[int, str]) 
                     entity_id = data.get("entity_id")
                     if isinstance(msg_id, int) and isinstance(entity_id, str):
                         pending_capabilities[msg_id] = entity_id
+                        print(f"[vipsy.ws] camera/capabilities requested for {entity_id}", flush=True)
+                elif isinstance(data, dict) and data.get("type") == "camera/stream":
+                    print(
+                        f"[vipsy.ws] camera/stream requested for {data.get('entity_id')} "
+                        f"format={data.get('format')}",
+                        flush=True,
+                    )
             except json.JSONDecodeError:
                 pass
         await ha_ws.send(message)
