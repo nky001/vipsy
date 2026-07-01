@@ -14,7 +14,8 @@ def test_webrtc_camera_route_preserves_tunnel_origin_before_generic_proxy():
     config = (Path(__file__).parents[1] / "rootfs" / "caddy" / "Caddyfile").read_text()
 
     route = "reverse_proxy @ha_webrtc"
-    assert "path /api/webrtc* /api/camera_proxy* /api/hls* /api/stream*" in config
+    assert "path /api/webrtc* /api/hls* /api/stream*" in config
+    assert "path /api/webrtc* /api/camera_proxy* /api/hls* /api/stream*" not in config
     assert "header_up Host {host}" in config
     assert "header_up X-Forwarded-Host {host}" in config
     assert "header_up X-Forwarded-Proto https" in config
@@ -25,6 +26,7 @@ def test_ha_websocket_preserves_tunnel_origin_for_camera_negotiation():
     config = (Path(__file__).parents[1] / "rootfs" / "caddy" / "Caddyfile").read_text()
 
     websocket_block = config.split("reverse_proxy @websocket", 1)[1].split("reverse_proxy {$HA_CORE_URL", 1)[0]
+    assert "path /api/websocket" in config
     assert "header_up Host {host}" in websocket_block
     assert "header_up X-Forwarded-Host {host}" in websocket_block
     assert "header_up X-Forwarded-Proto https" in websocket_block
