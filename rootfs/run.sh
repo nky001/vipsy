@@ -116,6 +116,7 @@ fi
 
 export HA_CORE_URL="http://homeassistant:8123"
 export HA_PROXY_HOST="homeassistant"
+export HA_WS_UPSTREAM_URL="ws://homeassistant:8123/api/websocket"
 
 port_available() {
     ! ss -tlnH "sport = :$1" 2>/dev/null | grep -q ":$1 " && return 0
@@ -195,6 +196,9 @@ if [ "$ENABLE_TURN" = "true" ]; then
 else
     echo "[vipsy] TURN disabled"
 fi
+
+echo "[vipsy] starting HA websocket compatibility proxy"
+python3 /server/ha_ws_proxy.py &
 
 echo "[vipsy] starting caddy"
 caddy run --config /caddy/Caddyfile --adapter caddyfile &
