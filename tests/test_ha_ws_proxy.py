@@ -26,7 +26,7 @@ class FakeWebSocket:
         self.request_headers = headers
 
 
-def test_generic_ip_camera_capabilities_are_downgraded_to_hls():
+def test_generic_ip_camera_capabilities_are_downgraded_to_mjpeg_fallback():
     pending = {12: "camera.192_168_7_130"}
     meta = {}
     message = json.dumps(
@@ -41,7 +41,7 @@ def test_generic_ip_camera_capabilities_are_downgraded_to_hls():
     rewritten = ha_ws_proxy._downgrade_capabilities_if_needed(message, pending, meta)
     data = json.loads(rewritten)
 
-    assert data["result"]["frontend_stream_types"] == ["hls"]
+    assert data["result"]["frontend_stream_types"] == []
     assert pending == {}
 
 
@@ -99,7 +99,7 @@ def test_non_generic_camera_with_hls_and_webrtc_is_not_changed():
     assert ha_ws_proxy._downgrade_capabilities_if_needed(message, pending, meta) == message
 
 
-def test_generic_brand_camera_capabilities_are_downgraded_to_hls():
+def test_generic_brand_camera_capabilities_are_downgraded_to_mjpeg_fallback():
     pending = {44: "camera.side_gate"}
     meta = {"camera.side_gate": {"brand": "generic", "model": "", "friendly_name": "side gate"}}
     message = json.dumps(
@@ -114,4 +114,4 @@ def test_generic_brand_camera_capabilities_are_downgraded_to_hls():
     rewritten = ha_ws_proxy._downgrade_capabilities_if_needed(message, pending, meta)
     data = json.loads(rewritten)
 
-    assert data["result"]["frontend_stream_types"] == ["hls"]
+    assert data["result"]["frontend_stream_types"] == []

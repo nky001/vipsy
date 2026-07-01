@@ -9,7 +9,7 @@ import websockets
 LISTEN_HOST = os.environ.get("HA_WS_PROXY_HOST", "127.0.0.1")
 LISTEN_PORT = int(os.environ.get("HA_WS_PROXY_PORT", "18100"))
 UPSTREAM_URL = os.environ.get("HA_WS_UPSTREAM_URL", "ws://homeassistant:8123/api/websocket")
-ENABLE_HLS_FALLBACK = os.environ.get("VIPSY_GENERIC_CAMERA_HLS_FALLBACK", "true").lower() == "true"
+ENABLE_GENERIC_CAMERA_FALLBACK = os.environ.get("VIPSY_GENERIC_CAMERA_FALLBACK", "true").lower() == "true"
 GENERIC_CAMERA_RE = re.compile(
     os.environ.get(
         "VIPSY_GENERIC_CAMERA_PATTERN",
@@ -76,15 +76,13 @@ def _downgrade_capabilities_if_needed(
         msg_id = data.get("id")
         entity_id = pending_capabilities.pop(msg_id, None) if isinstance(msg_id, int) else None
         result = data.get("result")
-        if ENABLE_HLS_FALLBACK and entity_id and _is_generic_camera(entity_id, camera_meta) and isinstance(result, dict):
+        if ENABLE_GENERIC_CAMERA_FALLBACK and entity_id and _is_generic_camera(entity_id, camera_meta) and isinstance(result, dict):
             stream_types = result.get("frontend_stream_types")
             if isinstance(stream_types, list):
                 keys = {_stream_type_key(item) for item in stream_types}
-                if keys & WEBRTC_TYPES and keys & HLS_TYPES:
-                    result["frontend_stream_types"] = [
-                        item for item in stream_types if _stream_type_key(item) not in WEBRTC_TYPES
-                    ]
-                    print(f"[vipsy.ws] forcing HLS camera stream for {entity_id}", flush=True)
+                if keys & (WEBRTC_TYPES | HLS_TYPES):
+                    result["frontend_stream_types"] = []
+                    print(f"[vipsy.ws] forcing MJPEG camera fallback for {entity_id}", flush=True)
                     return json.dumps(data, separators=(",", ":"))
     elif isinstance(data, dict):
         event = data.get("event")
