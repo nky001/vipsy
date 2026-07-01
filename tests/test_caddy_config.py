@@ -4,10 +4,21 @@ from pathlib import Path
 def test_ha_proxy_strips_forwarded_headers_for_default_install():
     config = (Path(__file__).parents[1] / "rootfs" / "caddy" / "Caddyfile").read_text()
 
-    assert config.count("header_up -X-Forwarded-For") == 2
+    assert config.count("header_up -X-Forwarded-For") == 3
     assert config.count("header_up -X-Forwarded-Proto") == 2
     assert config.count("header_up -X-Forwarded-Host") == 2
-    assert config.count("header_up -X-Real-IP") == 2
+    assert config.count("header_up -X-Real-IP") == 3
+
+
+def test_webrtc_camera_route_preserves_tunnel_origin_before_generic_proxy():
+    config = (Path(__file__).parents[1] / "rootfs" / "caddy" / "Caddyfile").read_text()
+
+    route = "reverse_proxy @ha_webrtc"
+    assert "path /api/webrtc* /api/camera_proxy* /api/hls* /api/stream*" in config
+    assert "header_up Host {host}" in config
+    assert "header_up X-Forwarded-Host {host}" in config
+    assert "header_up X-Forwarded-Proto https" in config
+    assert config.index(route) < config.index("reverse_proxy @websocket")
 
 
 def test_cloudflare_wireguard_relay_route_precedes_ha_websocket_proxy():

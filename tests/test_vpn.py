@@ -390,10 +390,16 @@ def test_status_when_disabled():
 
 
 def test_enable_restores_relay_when_interface_is_already_active():
-    with patch.object(vpn_manager, "_interface_exists", return_value=True):
-        with patch.object(vpn_manager, "_start_ttl_watcher") as start_ttl:
-            with patch.object(vpn_manager, "_start_relay", return_value=True) as start_relay:
-                result = vpn_manager.enable()
+    with tempfile.TemporaryDirectory() as tmp:
+        fake = FakePeersDir(tmp)
+        patches = _apply_patches(fake)
+        try:
+            with patch.object(vpn_manager, "_interface_exists", return_value=True):
+                with patch.object(vpn_manager, "_start_ttl_watcher") as start_ttl:
+                    with patch.object(vpn_manager, "_start_relay", return_value=True) as start_relay:
+                        result = vpn_manager.enable()
+        finally:
+            _stop_patches(patches)
 
     assert result["ok"] is True
     assert result["message"] == "VPN already enabled"

@@ -24,6 +24,17 @@
 		flush_interval -1
 	}
 
+	@ha_webrtc {
+		path /api/webrtc* /api/camera_proxy* /api/hls* /api/stream*
+	}
+	reverse_proxy @ha_webrtc {$HA_CORE_URL:http://homeassistant:8123} {
+		header_up Host {host}
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Proto https
+		header_up -X-Forwarded-For
+		header_up -X-Real-IP
+	}
+
 	@websocket {
 		header Connection *Upgrade*
 		header Upgrade websocket

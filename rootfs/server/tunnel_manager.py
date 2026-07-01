@@ -152,7 +152,28 @@ def _save_creds(creds):
     TUNNEL_CREDS_FILE.write_text(json.dumps(creds))
     TUNNEL_CREDS_FILE.chmod(0o600)
     if creds.get("url"):
-        TUNNEL_URL_FILE.write_text(creds["url"])
+        _write_cached_url(creds["url"])
+
+
+def _write_cached_url(url):
+    try:
+        TUNNEL_URL_FILE.write_text(url)
+    except OSError:
+        pass
+
+
+def _clear_cached_url():
+    try:
+        TUNNEL_URL_FILE.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _write_pid(pid):
+    try:
+        TUNNEL_PID_FILE.write_text(str(pid))
+    except OSError:
+        pass
 
 
 def _hostname_domain(hostname):
@@ -362,7 +383,7 @@ def start():
                         migration_error = f"Domain migration delayed: {exc}"
                 if not creds:
                     creds = _register()
-                TUNNEL_URL_FILE.write_text(creds["url"])
+                _write_cached_url(creds["url"])
                 cmd = [
                     "cloudflared", "tunnel",
                     "--no-autoupdate",
@@ -370,7 +391,7 @@ def start():
                     "run", "--token", creds["connector_token"],
                 ]
             else:
-                TUNNEL_URL_FILE.unlink(missing_ok=True)
+                _clear_cached_url()
                 cmd = [
                     "cloudflared", "tunnel",
                     "--no-autoupdate",
@@ -379,7 +400,7 @@ def start():
                 ]
             _process = subprocess.Popen(cmd, stdout=log_fd, stderr=log_fd)
             log_fd.close()
-            TUNNEL_PID_FILE.write_text(str(_process.pid))
+            _write_pid(_process.pid)
             _provision_error = migration_error
             if _backend_available():
                 _start_fallback()
