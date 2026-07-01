@@ -14,7 +14,8 @@ def test_webrtc_camera_route_preserves_tunnel_origin_before_generic_proxy():
     config = (Path(__file__).parents[1] / "rootfs" / "caddy" / "Caddyfile").read_text()
 
     route = "reverse_proxy @ha_webrtc"
-    assert "path /api/webrtc* /api/hls* /api/stream*" in config
+    assert "path /api/webrtc*" in config
+    assert "path /api/webrtc* /api/hls* /api/stream*" not in config
     assert "path /api/webrtc* /api/camera_proxy* /api/hls* /api/stream*" not in config
     assert "header_up Host {host}" in config
     assert "header_up X-Forwarded-Host {host}" in config

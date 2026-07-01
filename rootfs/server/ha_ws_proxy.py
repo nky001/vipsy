@@ -18,6 +18,14 @@ GENERIC_CAMERA_RE = re.compile(
 )
 WEBRTC_TYPES = {"web_rtc", "webrtc"}
 HLS_TYPES = {"hls"}
+UPSTREAM_HEADER_ALLOWLIST = {
+    "authorization",
+    "cookie",
+    "user-agent",
+    "x-ha-access",
+    "x-hassio-key",
+    "x-supervisor-token",
+}
 
 
 def _stream_type_key(value: Any) -> str:
@@ -107,18 +115,46 @@ async def _ha_to_client(client_ws, ha_ws, pending_capabilities: dict[int, str], 
         await client_ws.send(message)
 
 
+def _upstream_headers(client_ws) -> list[tuple[str, str]]:
+    headers = getattr(client_ws, "request_headers", None)
+    if not headers:
+        return []
+    forwarded: list[tuple[str, str]] = []
+    for name, value in headers.raw_items():
+        if name.lower() in UPSTREAM_HEADER_ALLOWLIST:
+            forwarded.append((name, value))
+    return forwarded
+
+
+def _upstream_origin(client_ws) -> str | None:
+    headers = getattr(client_ws, "request_headers", None)
+    if not headers:
+        return None
+    return headers.get("Origin")
+
+
 async def _handle_client(client_ws, path=None) -> None:
     pending_capabilities: dict[int, str] = {}
     camera_meta: dict[str, dict[str, str]] = {}
     try:
-        async with websockets.connect(UPSTREAM_URL, max_size=None, ping_interval=20, ping_timeout=20) as ha_ws:
+        async with websockets.connect(
+            UPSTREAM_URL,
+            extra_headers=_upstream_headers(client_ws),
+            origin=_upstream_origin(client_ws),
+            max_size=None,
+            ping_interval=20,
+            ping_timeout=20,
+        ) as ha_ws:
             to_ha = asyncio.create_task(_client_to_ha(client_ws, ha_ws, pending_capabilities))
             to_client = asyncio.create_task(_ha_to_client(client_ws, ha_ws, pending_capabilities, camera_meta))
             done, pending = await asyncio.wait({to_ha, to_client}, return_when=asyncio.FIRST_COMPLETED)
             for task in pending:
                 task.cancel()
             for task in done:
-                task.result()
+                try:
+                    task.result()
+                except websockets.ConnectionClosed:
+                    pass
     except Exception as exc:
         print(f"[vipsy.ws] websocket proxy closed: {exc}", flush=True)
 

@@ -7,6 +7,25 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 import ha_ws_proxy
 
 
+class FakeHeaders:
+    def __init__(self, items):
+        self._items = items
+
+    def raw_items(self):
+        return self._items
+
+    def get(self, name):
+        for key, value in self._items:
+            if key.lower() == name.lower():
+                return value
+        return None
+
+
+class FakeWebSocket:
+    def __init__(self, headers):
+        self.request_headers = headers
+
+
 def test_generic_ip_camera_capabilities_are_downgraded_to_hls():
     pending = {12: "camera.192_168_7_130"}
     meta = {}
@@ -24,6 +43,30 @@ def test_generic_ip_camera_capabilities_are_downgraded_to_hls():
 
     assert data["result"]["frontend_stream_types"] == ["hls"]
     assert pending == {}
+
+
+def test_upstream_headers_forward_auth_but_not_websocket_hop_headers():
+    ws = FakeWebSocket(
+        FakeHeaders(
+            [
+                ("Cookie", "session=abc"),
+                ("Authorization", "Bearer token"),
+                ("Sec-WebSocket-Key", "drop-me"),
+                ("Connection", "Upgrade"),
+            ]
+        )
+    )
+
+    assert ha_ws_proxy._upstream_headers(ws) == [
+        ("Cookie", "session=abc"),
+        ("Authorization", "Bearer token"),
+    ]
+
+
+def test_upstream_origin_preserves_browser_origin():
+    ws = FakeWebSocket(FakeHeaders([("Origin", "https://example.vipsy.in")]))
+
+    assert ha_ws_proxy._upstream_origin(ws) == "https://example.vipsy.in"
 
 
 def test_native_webrtc_only_camera_capabilities_are_not_changed():

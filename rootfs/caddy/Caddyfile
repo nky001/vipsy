@@ -25,7 +25,7 @@
 	}
 
 	@ha_webrtc {
-		path /api/webrtc* /api/hls* /api/stream*
+		path /api/webrtc*
 	}
 	reverse_proxy @ha_webrtc {$HA_CORE_URL:http://homeassistant:8123} {
 		header_up Host {host}
