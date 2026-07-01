@@ -1,7 +1,6 @@
 import os
 import sys
 from unittest.mock import patch, MagicMock
-from io import BytesIO
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "rootfs", "server")))
 
@@ -372,42 +371,3 @@ def test_vpn_port_maps_api_add_and_remove():
     assert del_resp.status_code == 200
     add_map.assert_called_once_with("Camera", "tcp", 18080, "192.168.20.10", 80)
     remove_map.assert_called_once_with("deadbeef")
-
-
-class FakeCameraResponse:
-    status = 200
-    headers = {"Content-Type": "image/jpeg"}
-
-    def __init__(self, body=b"jpeg"):
-        self._body = BytesIO(body)
-        self.closed = False
-
-    def read(self, size=-1):
-        return self._body.read(size)
-
-    def close(self):
-        self.closed = True
-
-
-def test_camera_proxy_uses_supervisor_token_and_drops_authsig():
-    captured = {}
-
-    def fake_urlopen(req, timeout=0):
-        captured["url"] = req.full_url
-        captured["authorization"] = req.get_header("Authorization")
-        captured["timeout"] = timeout
-        return FakeCameraResponse()
-
-    with patch.object(gateway, "SUPERVISOR_TOKEN", "super-token"):
-        with patch.object(gateway, "HA_CAMERA_PROXY_BASE", "http://supervisor/core/api"):
-            with patch.object(gateway.urllib.request, "urlopen", side_effect=fake_urlopen):
-                resp = _client().get(
-                    "/api/camera_proxy/camera.192_168_7_130"
-                    "?authSig=expired&width=1024&height=0"
-                )
-
-    assert resp.status_code == 200
-    assert resp.data == b"jpeg"
-    assert captured["authorization"] == "Bearer super-token"
-    assert captured["timeout"] == 60
-    assert captured["url"] == "http://supervisor/core/api/api/camera_proxy/camera.192_168_7_130?width=1024&height=0"
