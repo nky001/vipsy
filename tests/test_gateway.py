@@ -410,10 +410,12 @@ def test_camera_proxy_stream_serves_mjpeg_from_stills():
         calls["count"] += 1
         if calls["count"] > 1:
             raise GeneratorExit
-        assert req.full_url == (
+        assert req.full_url.startswith(
             "http://homeassistant:8123/api/camera_proxy/camera.192_168_7_130"
             "?token=abc&width=1280&height=0"
         )
+        assert "_v=" in req.full_url
+        assert req.get_header("Cache-control") == "no-cache"
         assert timeout == 15
         return FakeStillResponse()
 

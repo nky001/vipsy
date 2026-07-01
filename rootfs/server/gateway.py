@@ -39,7 +39,7 @@ HTTPS_HOST_PORT = int(os.environ.get("HTTPS_HOST_PORT", 443))
 AUTH_TOKEN_PATH = Path("/data/auth_token")
 DEFAULT_BACKEND_URL = "https://api.vipsy.in"
 BACKEND_URL = os.environ.get("VIPSY_BACKEND_URL", DEFAULT_BACKEND_URL).strip()
-CAMERA_MJPEG_INTERVAL = float(os.environ.get("VIPSY_CAMERA_MJPEG_INTERVAL", "1.0"))
+CAMERA_MJPEG_INTERVAL = float(os.environ.get("VIPSY_CAMERA_MJPEG_INTERVAL", "0.25"))
 CAMERA_MJPEG_BOUNDARY = "vipsyframe"
 
 
@@ -252,7 +252,17 @@ def _camera_still_url(entity_id):
 
 
 def _fetch_camera_still(url):
-    req = urllib.request.Request(url, headers={"User-Agent": "vipsy-camera-stream/1.0"})
+    separator = "&" if "?" in url else "?"
+    bust_url = f"{url}{separator}_v={time.time_ns()}"
+    req = urllib.request.Request(
+        bust_url,
+        headers={
+            "User-Agent": "vipsy-camera-stream/1.0",
+            "Accept": "image/jpeg,image/*;q=0.9,*/*;q=0.1",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        },
+    )
     with urllib.request.urlopen(req, timeout=15) as resp:
         return resp.read(), resp.headers.get("Content-Type", "image/jpeg")
 
@@ -275,6 +285,8 @@ def _mjpeg_camera_stream(entity_id):
                 yield b"\r\n"
                 time.sleep(max(CAMERA_MJPEG_INTERVAL, 0.25))
             except GeneratorExit:
+                return
+            except (BrokenPipeError, ConnectionResetError):
                 return
             except Exception as exc:
                 print(f"[vipsy.camera] still fetch failed for {entity_id}: {exc}", flush=True)
