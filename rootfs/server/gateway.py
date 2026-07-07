@@ -706,7 +706,11 @@ def vpn_status():
 
 @app.route("/api/vpn/enable", methods=["POST"])
 def vpn_enable():
-    result = vpn_manager.enable()
+    try:
+        result = vpn_manager.enable()
+    except Exception as exc:
+        logging.exception("local VPN enable failed")
+        result = {"ok": False, "error": f"Failed to enable VPN: {exc}"}
     code = 200 if result.get("ok") else 500
     return jsonify(result), code
 

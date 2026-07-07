@@ -202,6 +202,22 @@ def test_extra_subnet_rejects_public_or_duplicate_subnet():
             _stop_patches(patches)
 
 
+def test_extra_subnet_reapplies_rules_when_vpn_is_active():
+    with tempfile.TemporaryDirectory() as tmp:
+        fake = FakePeersDir(tmp)
+        patches = _apply_patches(fake)
+        try:
+            with patch.object(vpn_manager, "_interface_exists", return_value=True):
+                with patch.object(vpn_manager, "_apply_nat_rules") as apply_rules:
+                    added = vpn_manager.add_extra_subnet("192.168.20.0/24", "CCTV")
+                    removed = vpn_manager.remove_extra_subnet(added["route"]["id"])
+            assert added["ok"] is True
+            assert removed["ok"] is True
+            assert apply_rules.call_count == 2
+        finally:
+            _stop_patches(patches)
+
+
 def test_port_map_validation_and_remove():
     with tempfile.TemporaryDirectory() as tmp:
         fake = FakePeersDir(tmp)
@@ -395,9 +411,12 @@ def test_enable_restores_relay_when_interface_is_already_active():
         patches = _apply_patches(fake)
         try:
             with patch.object(vpn_manager, "_interface_exists", return_value=True):
-                with patch.object(vpn_manager, "_start_ttl_watcher") as start_ttl:
-                    with patch.object(vpn_manager, "_start_relay", return_value=True) as start_relay:
-                        result = vpn_manager.enable()
+                with patch.object(vpn_manager, "_interface_ready", return_value=True):
+                    with patch.object(vpn_manager, "_apply_nat_rules"):
+                        with patch.object(vpn_manager, "_restore_peers"):
+                            with patch.object(vpn_manager, "_start_ttl_watcher") as start_ttl:
+                                with patch.object(vpn_manager, "_start_relay", return_value=True) as start_relay:
+                                    result = vpn_manager.enable()
         finally:
             _stop_patches(patches)
 
@@ -407,16 +426,84 @@ def test_enable_restores_relay_when_interface_is_already_active():
     start_relay.assert_called_once_with()
 
 
+def test_enable_recreates_stale_interface_before_starting():
+    with tempfile.TemporaryDirectory() as tmp:
+        fake = FakePeersDir(tmp)
+        patches = _apply_patches(fake)
+        try:
+            with patch.object(vpn_manager, "_interface_exists", side_effect=[True, True]):
+                with patch.object(vpn_manager, "_interface_ready", return_value=False):
+                    with patch.object(vpn_manager, "_get_or_create_server_keys", return_value=("priv", "pub")):
+                        with patch.object(vpn_manager, "_check_subnet_overlap", return_value=None):
+                            with patch.object(vpn_manager, "_create_interface") as create_iface:
+                                with patch.object(vpn_manager, "_apply_nat_rules"):
+                                    with patch.object(vpn_manager, "_restore_peers"):
+                                        with patch.object(vpn_manager, "_start_ttl_watcher"):
+                                            with patch.object(vpn_manager, "_start_relay", return_value=True):
+                                                with patch.object(vpn_manager, "_destroy_interface") as destroy:
+                                                    result = vpn_manager.enable()
+        finally:
+            _stop_patches(patches)
+
+    assert result["ok"] is True
+    destroy.assert_called_once_with()
+    create_iface.assert_called_once()
+
+
+def test_enable_returns_json_error_and_cleans_partial_interface_on_port_conflict():
+    with tempfile.TemporaryDirectory() as tmp:
+        fake = FakePeersDir(tmp)
+        patches = _apply_patches(fake)
+        try:
+            with patch.object(vpn_manager, "_interface_exists", return_value=False):
+                with patch.object(vpn_manager, "_get_or_create_server_keys", return_value=("priv", "pub")):
+                    with patch.object(vpn_manager, "_check_subnet_overlap", return_value=None):
+                        with patch.object(vpn_manager, "_create_interface", side_effect=RuntimeError("RTNETLINK answers: Address in use")):
+                            with patch.object(vpn_manager, "_destroy_interface") as destroy:
+                                with patch.object(vpn_manager, "_flush_nat_rules") as flush:
+                                    with patch.object(vpn_manager, "_stop_relay") as stop_relay:
+                                        result = vpn_manager.enable()
+        finally:
+            _stop_patches(patches)
+
+    assert result["ok"] is False
+    assert "51820/udp is already in use" in result["error"]
+    stop_relay.assert_called_once_with()
+    destroy.assert_called()
+    flush.assert_called()
+
+
+def test_start_relay_accepts_existing_ready_listener_without_owned_process():
+    old_retry = vpn_manager._relay_retry_after
+    old_error = vpn_manager._relay_last_error
+    old_process = vpn_manager._relay_process
+    vpn_manager._relay_retry_after = 999999999.0
+    vpn_manager._relay_last_error = "old failure"
+    vpn_manager._relay_process = None
+    try:
+        with patch.object(vpn_manager, "_relay_ready", return_value=True):
+            with patch.object(vpn_manager, "_stop_relay") as stop_relay:
+                assert vpn_manager._start_relay() is True
+    finally:
+        vpn_manager._relay_retry_after = old_retry
+        vpn_manager._relay_last_error = old_error
+        vpn_manager._relay_process = old_process
+
+    stop_relay.assert_not_called()
+    assert vpn_manager._relay_last_error is None
+
+
 def test_status_recovers_missing_relay_for_active_vpn():
     with patch.object(vpn_manager, "_interface_exists", return_value=True):
         with patch.object(vpn_manager, "_is_relay_running", side_effect=[False, True]):
-            with patch.object(vpn_manager, "_start_relay", return_value=True) as start_relay:
-                with patch.object(vpn_manager, "_load_peers", return_value=[]):
-                    with patch.object(vpn_manager, "_get_wg_show", return_value={}):
-                        with patch.object(vpn_manager, "_check_subnet_overlap", return_value=None):
-                            with patch.object(vpn_manager, "_detect_lan_subnet", return_value="192.168.1.0/24"):
-                                with patch.object(vpn_manager, "_relay_last_error", None):
-                                    state = vpn_manager.status()
+            with patch.object(vpn_manager, "_relay_ready", return_value=True):
+                with patch.object(vpn_manager, "_start_relay", return_value=True) as start_relay:
+                    with patch.object(vpn_manager, "_load_peers", return_value=[]):
+                        with patch.object(vpn_manager, "_get_wg_show", return_value={}):
+                            with patch.object(vpn_manager, "_check_subnet_overlap", return_value=None):
+                                with patch.object(vpn_manager, "_detect_lan_subnet", return_value="192.168.1.0/24"):
+                                    with patch.object(vpn_manager, "_relay_last_error", None):
+                                        state = vpn_manager.status()
 
     start_relay.assert_called_once_with()
     assert state["enabled"] is True

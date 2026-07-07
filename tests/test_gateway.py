@@ -374,6 +374,16 @@ def test_vpn_port_maps_api_add_and_remove():
     remove_map.assert_called_once_with("deadbeef")
 
 
+def test_vpn_enable_api_returns_json_on_exception():
+    with patch.object(gateway.vpn_manager, "enable", side_effect=RuntimeError("boom")):
+        resp = _client().post("/api/vpn/enable")
+
+    assert resp.status_code == 500
+    data = resp.get_json()
+    assert data["ok"] is False
+    assert "Failed to enable VPN" in data["error"]
+
+
 def test_camera_still_url_uses_stream_token_and_drops_authsig():
     with app.test_request_context(
         "/api/camera_proxy_stream/camera.192_168_7_130"

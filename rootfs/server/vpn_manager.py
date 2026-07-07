@@ -401,6 +401,8 @@ def add_extra_subnet(subnet, name=""):
     }
     routes.append(item)
     _save_json_list(_extra_subnets_path(), routes)
+    if _interface_exists():
+        _apply_nat_rules()
     _audit("add_route", extra={"subnet": item["subnet"], "name": item["name"]})
     return {"ok": True, "route": item, "routes": routes}
 
@@ -411,6 +413,8 @@ def remove_extra_subnet(route_id):
     if len(kept) == len(routes):
         return {"ok": False, "error": "Route not found"}
     _save_json_list(_extra_subnets_path(), kept)
+    if _interface_exists():
+        _apply_nat_rules()
     _audit("remove_route", extra={"route_id": route_id})
     return {"ok": True, "routes": kept}
 
@@ -583,6 +587,27 @@ def _interface_exists():
         return False
 
 
+def _interface_ready(server_ip=None, subnet=None, port=None):
+    if not _interface_exists():
+        return False
+    subnet = subnet or _subnet()
+    server_ip = server_ip or _server_ip(subnet)
+    port = port or _port()
+    prefix = _network(subnet).prefixlen
+    try:
+        link = _run(["ip", "-o", "link", "show", "dev", VPN_INTERFACE])
+        addrs = _run(["ip", "-o", "-4", "addr", "show", "dev", VPN_INTERFACE])
+        listen_port = _run(["wg", "show", VPN_INTERFACE, "listen-port"])
+    except RuntimeError:
+        return False
+    flags = link.split(":", 2)[1] if ":" in link else link
+    return (
+        "UP" in flags
+        and f"{server_ip}/{prefix}" in addrs
+        and listen_port.strip() == str(port)
+    )
+
+
 def _ensure_forwarding(iface=None):
     for cmd in [["sysctl", "-w", "net.ipv4.ip_forward=1"]]:
         try:
@@ -654,17 +679,24 @@ def _flush_nat_rules():
 
 def _create_interface(privkey, port, server_ip, subnet):
     prefix = str(_network(subnet).prefixlen)
-    _run(["ip", "link", "add", "dev", VPN_INTERFACE, "type", "wireguard"])
-    _run(["ip", "address", "add", "dev", VPN_INTERFACE, f"{server_ip}/{prefix}"])
-    proc = subprocess.run(
-        ["wg", "set", VPN_INTERFACE,
-         "listen-port", str(port),
-         "private-key", "/dev/stdin"],
-        input=privkey, capture_output=True, text=True, timeout=10,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"wg set failed: {proc.stderr}")
-    _run(["ip", "link", "set", "up", "dev", VPN_INTERFACE])
+    created = False
+    try:
+        _run(["ip", "link", "add", "dev", VPN_INTERFACE, "type", "wireguard"])
+        created = True
+        _run(["ip", "address", "add", "dev", VPN_INTERFACE, f"{server_ip}/{prefix}"])
+        proc = subprocess.run(
+            ["wg", "set", VPN_INTERFACE,
+             "listen-port", str(port),
+             "private-key", "/dev/stdin"],
+            input=privkey, capture_output=True, text=True, timeout=10,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"wg set failed: {proc.stderr}")
+        _run(["ip", "link", "set", "up", "dev", VPN_INTERFACE])
+    except Exception:
+        if created:
+            _destroy_interface()
+        raise
 
 
 def _destroy_interface():
@@ -801,6 +833,10 @@ def _start_relay():
     global _relay_process, _relay_last_error, _relay_retry_after
     if _relay_process and _relay_process.poll() is None and _relay_ready():
         return True
+    if _relay_ready():
+        _relay_last_error = None
+        _relay_retry_after = 0.0
+        return True
     if time.monotonic() < _relay_retry_after:
         return False
     _stop_relay()
@@ -863,14 +899,18 @@ def _stop_relay():
 
 
 def _is_relay_running():
-    return _relay_process is not None and _relay_process.poll() is None
+    return (_relay_process is not None and _relay_process.poll() is None) or _relay_ready()
 
 
 def relay_status():
+    global _relay_last_error
     running = _is_relay_running()
+    ready = _relay_ready()
+    if ready:
+        _relay_last_error = None
     return {
         "running": running,
-        "ready": running and _relay_last_error is None,
+        "ready": ready,
         "port": WG_RELAY_PORT,
         "error": _relay_last_error,
     }
@@ -892,13 +932,14 @@ def _tunnel_url():
     return None
 
 
-def get_relay_client_script(tunnel_ws_url):
+def get_relay_client_script(tunnel_ws_url, local_udp_port=None):
+    local_udp_port = int(local_udp_port or _port())
     return r'''#!/usr/bin/env python3
 import base64, hashlib, os, select, socket, ssl, struct, sys, threading, time
 from urllib.parse import urlparse
 
 WS_URL = "''' + tunnel_ws_url + r'''"
-LOCAL_UDP_PORT = 51820
+LOCAL_UDP_PORT = ''' + str(local_udp_port) + r'''
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 _stop = threading.Event()
 _ws_lock = threading.Lock()
@@ -1091,11 +1132,11 @@ def get_tunnel_bundle(peer_id, peer, server_pubkey, dns=None):
     if not turl:
         return None
     ws_url = turl.rstrip("/").replace("https://", "wss://").replace("http://", "ws://") + "/wg-tunnel"
-    relay_script = get_relay_client_script(ws_url)
+    port = _port()
+    relay_script = get_relay_client_script(ws_url, port)
     subnet = _subnet()
     allowed_ips = ", ".join(_routed_subnets(include_vpn=True))
     prefix = _network(subnet).prefixlen
-    port = _port()
     conf_lines = [
         "[Interface]",
         f"PrivateKey = {peer['privkey']}",
@@ -1256,24 +1297,50 @@ def _stop_ttl_watcher():
 
 def enable():
     with _lock:
-        if _interface_exists():
-            _remember_enabled(True)
-            _start_ttl_watcher()
-            relay_ready = _start_relay()
-            result = {"ok": True, "message": "VPN already enabled"}
-            if not relay_ready:
-                result["warning"] = _relay_last_error or "Cloudflare relay is not ready yet"
-            return result
-
         overlap = _check_subnet_overlap()
         privkey, pubkey = _get_or_create_server_keys()
         subnet = _subnet()
         port = _port()
         server_ip = _server_ip(subnet)
 
-        _create_interface(privkey, port, server_ip, subnet)
-        _apply_nat_rules()
-        _restore_peers()
+        if _interface_exists():
+            if _interface_ready(server_ip, subnet, port):
+                _apply_nat_rules()
+                _restore_peers()
+                _remember_enabled(True)
+                _start_ttl_watcher()
+                relay_ready = _start_relay()
+                result = {"ok": True, "message": "VPN already enabled"}
+                if not relay_ready:
+                    result["warning"] = _relay_last_error or "Cloudflare relay is not ready yet"
+                return result
+            _log.warning("local VPN interface exists but is not usable; recreating %s", VPN_INTERFACE)
+            _destroy_interface()
+            _flush_nat_rules()
+
+        try:
+            try:
+                _create_interface(privkey, port, server_ip, subnet)
+            except RuntimeError as first_error:
+                if "Address in use" not in str(first_error) and "File exists" not in str(first_error):
+                    raise
+                _log.warning("local VPN interface create failed once, retrying after cleanup: %s", first_error)
+                _destroy_interface()
+                time.sleep(0.2)
+                _create_interface(privkey, port, server_ip, subnet)
+            _apply_nat_rules()
+            _restore_peers()
+        except Exception as exc:
+            _stop_relay()
+            _destroy_interface()
+            _flush_nat_rules()
+            _remember_enabled(False)
+            message = str(exc)
+            if "Address in use" in message:
+                message = f"WireGuard port {port}/udp is already in use. Disable the old local VPN instance or choose another VPN port."
+            _audit("enable_failed", extra={"error": message, "port": port, "subnet": subnet})
+            return {"ok": False, "error": message}
+
         _remember_enabled(True)
         _start_ttl_watcher()
         relay_ready = _start_relay()
