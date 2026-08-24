@@ -114,9 +114,51 @@ else
     echo "[vipsy] using self-signed cert"
 fi
 
-export HA_CORE_URL="http://homeassistant:8123"
+# Home Assistant Core may be configured with a non-default HTTP port.  Ask the
+# Supervisor for the active port instead of assuming 8123.  Keep the default
+# for installations where the Supervisor API is temporarily unavailable.
+HA_CORE_PORT="8123"
+if [ -n "${SUPERVISOR_TOKEN:-}" ]; then
+    CORE_INFO=$(curl -sf -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" http://supervisor/core/info 2>/dev/null || echo "{}")
+    SUPERVISOR_CORE_PORT=$(echo "$CORE_INFO" | jq -r '.data.port // empty' 2>/dev/null || echo "")
+    if [[ "$SUPERVISOR_CORE_PORT" =~ ^[1-9][0-9]{0,4}$ ]]; then
+        HA_CORE_PORT="$SUPERVISOR_CORE_PORT"
+    fi
+fi
+
+ha_core_reachable() {
+    curl -sS --connect-timeout 3 --max-time 5 --output /dev/null \
+        "http://$1:${HA_CORE_PORT}/" 2>/dev/null
+}
+
+# Preserve the existing internal DNS route whenever it works.  On HAOS systems
+# where Core shares the host network and uses a custom port, localhost is the
+# reliable route from this host-network add-on.
+HA_CORE_HOST="homeassistant"
+# A custom Core port on a host-network add-on should prefer loopback: the
+# `homeassistant` alias can resolve to the Supervisor gateway instead of Core.
+if [ "$HA_CORE_PORT" != "8123" ] && ha_core_reachable "127.0.0.1"; then
+    HA_CORE_HOST="127.0.0.1"
+    echo "[vipsy] Home Assistant Core reachable through localhost:${HA_CORE_PORT}"
+elif ha_core_reachable "$HA_CORE_HOST"; then
+    echo "[vipsy] Home Assistant Core reachable through ${HA_CORE_HOST}:${HA_CORE_PORT}"
+elif ha_core_reachable "127.0.0.1"; then
+    HA_CORE_HOST="127.0.0.1"
+    echo "[vipsy] Home Assistant Core reachable through localhost:${HA_CORE_PORT}"
+elif [ -n "$HOST_IP" ] && ha_core_reachable "$HOST_IP"; then
+    HA_CORE_HOST="$HOST_IP"
+    echo "[vipsy] Home Assistant Core reachable through detected host IP ${HA_CORE_HOST}:${HA_CORE_PORT}"
+else
+    echo "[vipsy] WARNING: Home Assistant Core is unreachable on port ${HA_CORE_PORT} through homeassistant, localhost, and detected host IP"
+fi
+
+export HA_CORE_HOST
+export HA_CORE_PORT
+export HA_CORE_URL="http://${HA_CORE_HOST}:${HA_CORE_PORT}"
+# Retain the existing upstream Host header even when the TCP connection uses
+# localhost or the detected LAN address.
 export HA_PROXY_HOST="homeassistant"
-export HA_WS_UPSTREAM_URL="ws://homeassistant:8123/api/websocket"
+export HA_WS_UPSTREAM_URL="ws://${HA_CORE_HOST}:${HA_CORE_PORT}/api/websocket"
 
 port_available() {
     ! ss -tlnH "sport = :$1" 2>/dev/null | grep -q ":$1 " && return 0
