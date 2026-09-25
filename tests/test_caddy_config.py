@@ -3,11 +3,12 @@ from pathlib import Path
 
 def test_ha_proxy_strips_forwarded_headers_for_default_install():
     config = (Path(__file__).parents[1] / "rootfs" / "caddy" / "Caddyfile").read_text()
+    generic_proxy = config.rsplit("reverse_proxy {$HA_CORE_URL", 1)[1]
 
-    assert config.count("header_up -X-Forwarded-For") == 3
-    assert config.count("header_up -X-Forwarded-Proto") == 1
-    assert config.count("header_up -X-Forwarded-Host") == 1
-    assert config.count("header_up -X-Real-IP") == 3
+    assert "header_up -X-Forwarded-For" in generic_proxy
+    assert "header_up -X-Forwarded-Proto" in generic_proxy
+    assert "header_up -X-Forwarded-Host" in generic_proxy
+    assert "header_up -X-Real-IP" in generic_proxy
 
 
 def test_webrtc_camera_route_preserves_tunnel_origin_before_generic_proxy():
@@ -39,6 +40,8 @@ def test_home_assistant_camera_and_media_streams_are_forwarded_without_buffering
     assert "path /api/camera_proxy_stream* /api/hls* /api/stream*" in config
     assert "reverse_proxy @ha_media_stream {$HA_CORE_URL:http://homeassistant:8123}" in config
     assert config.index("reverse_proxy @ha_media_stream") < config.index("reverse_proxy @ha_webrtc")
+    assert "header_up Host {$HA_PROXY_HOST:homeassistant}" in stream_block
+    assert "header_up -X-Forwarded-Proto" in stream_block
     assert "flush_interval -1" in stream_block
 
 
