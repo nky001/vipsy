@@ -55,6 +55,28 @@ def test_generic_camera_keeps_hls_and_skips_broken_webrtc_provider():
     assert '"frontend_stream_types":["hls"]' in client.sent[0]
 
 
+def test_generic_rtsp_camera_uses_hls_when_provider_advertises_only_webrtc():
+    capabilities = '{"id":12,"type":"result","success":true,"result":{"frontend_stream_types":["web_rtc"]}}'
+    upstream = FakeMessageSocket([capabilities])
+    client = FakeMessageSocket([])
+
+    asyncio.run(ha_ws_proxy._ha_to_client(client, upstream, {12: "camera.192_168_7_97"}, {}))
+
+    assert len(client.sent) == 1
+    assert '"frontend_stream_types":["hls"]' in client.sent[0]
+
+
+def test_generic_rtsp_camera_uses_hls_when_capability_list_is_empty():
+    capabilities = '{"id":12,"type":"result","success":true,"result":{"frontend_stream_types":[]}}'
+    upstream = FakeMessageSocket([capabilities])
+    client = FakeMessageSocket([])
+
+    asyncio.run(ha_ws_proxy._ha_to_client(client, upstream, {12: "camera.192_168_7_97"}, {}))
+
+    assert len(client.sent) == 1
+    assert '"frontend_stream_types":["hls"]' in client.sent[0]
+
+
 def test_non_generic_camera_web_rtc_capability_is_preserved():
     capabilities = '{"id":12,"type":"result","success":true,"result":{"frontend_stream_types":["hls","web_rtc"]}}'
     upstream = FakeMessageSocket([capabilities])

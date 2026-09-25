@@ -70,13 +70,26 @@ def _preserve_hls_for_generic_camera(
             stream_types = result.get("frontend_stream_types")
             if isinstance(stream_types, list):
                 keys = {str(value).strip().lower().replace("-", "_") for value in stream_types}
-                if "hls" in keys and keys.intersection({"web_rtc", "webrtc"}):
+                webrtc_types = {"web_rtc", "webrtc"}
+                print(
+                    f"[vipsy.ws] camera capabilities for {entity_id}: {stream_types}",
+                    flush=True,
+                )
+                if "hls" in keys and keys.intersection(webrtc_types):
                     result["frontend_stream_types"] = [
                         value for value in stream_types
-                        if str(value).strip().lower().replace("-", "_") not in {"web_rtc", "webrtc"}
+                        if str(value).strip().lower().replace("-", "_") not in webrtc_types
                     ]
+                elif keys.intersection(webrtc_types) or not keys:
+                    # Generic RTSP cameras use HA's stream integration (HLS).
+                    # A go2rtc WebRTC provider may advertise an unavailable
+                    # RTSP alias, so keep the built-in stream path selectable.
+                    result["frontend_stream_types"] = ["hls"]
+                else:
+                    return message
+                if result["frontend_stream_types"] != stream_types:
                     print(
-                        f"[vipsy.ws] preferring HLS for generic camera {entity_id}; "
+                        f"[vipsy.ws] selecting HLS for generic camera {entity_id}; "
                         f"original_stream_types={stream_types}",
                         flush=True,
                     )
@@ -100,6 +113,8 @@ async def _client_to_ha(client_ws, ha_ws, pending_capabilities: dict[int, str]) 
                     entity_id = data.get("entity_id")
                     if isinstance(msg_id, int) and isinstance(entity_id, str):
                         pending_capabilities[msg_id] = entity_id
+                        if _is_generic_camera(entity_id, {}):
+                            print(f"[vipsy.ws] camera/capabilities requested for {entity_id}", flush=True)
             except json.JSONDecodeError:
                 pass
         await ha_ws.send(message)
