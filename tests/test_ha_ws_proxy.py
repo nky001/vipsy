@@ -1,4 +1,4 @@
-import json
+import asyncio
 import os
 import sys
 
@@ -26,23 +26,31 @@ class FakeWebSocket:
         self.request_headers = headers
 
 
-def test_generic_ip_camera_capabilities_are_downgraded_to_mjpeg_fallback():
-    pending = {12: "camera.192_168_7_130"}
-    meta = {}
-    message = json.dumps(
-        {
-            "id": 12,
-            "type": "result",
-            "success": True,
-            "result": {"frontend_stream_types": ["hls", "web_rtc"]},
-        }
-    )
+class FakeMessageSocket:
+    def __init__(self, messages):
+        self.messages = messages
+        self.sent = []
 
-    rewritten = ha_ws_proxy._downgrade_capabilities_if_needed(message, pending, meta)
-    data = json.loads(rewritten)
+    def __aiter__(self):
+        return self
 
-    assert data["result"]["frontend_stream_types"] == []
-    assert pending == {}
+    async def __anext__(self):
+        if not self.messages:
+            raise StopAsyncIteration
+        return self.messages.pop(0)
+
+    async def send(self, message):
+        self.sent.append(message)
+
+
+def test_camera_capabilities_are_forwarded_without_rewriting():
+    capabilities = '{"id":12,"type":"result","success":true,"result":{"frontend_stream_types":["hls"]}}'
+    upstream = FakeMessageSocket([capabilities])
+    client = FakeMessageSocket([])
+
+    asyncio.run(ha_ws_proxy._ha_to_client(client, upstream))
+
+    assert client.sent == [capabilities]
 
 
 def test_upstream_headers_forward_auth_but_not_websocket_hop_headers():
@@ -67,51 +75,3 @@ def test_upstream_origin_preserves_browser_origin():
     ws = FakeWebSocket(FakeHeaders([("Origin", "https://example.vipsy.in")]))
 
     assert ha_ws_proxy._upstream_origin(ws) == "https://example.vipsy.in"
-
-
-def test_native_webrtc_only_camera_capabilities_are_not_changed():
-    pending = {12: "camera.front_door"}
-    meta = {}
-    message = json.dumps(
-        {
-            "id": 12,
-            "type": "result",
-            "success": True,
-            "result": {"frontend_stream_types": ["web_rtc"]},
-        }
-    )
-
-    assert ha_ws_proxy._downgrade_capabilities_if_needed(message, pending, meta) == message
-
-
-def test_non_generic_camera_with_hls_and_webrtc_is_not_changed():
-    pending = {12: "camera.hikvision_driveway"}
-    meta = {"camera.hikvision_driveway": {"brand": "hikvision", "model": "", "friendly_name": "driveway"}}
-    message = json.dumps(
-        {
-            "id": 12,
-            "type": "result",
-            "success": True,
-            "result": {"frontend_stream_types": ["hls", "web_rtc"]},
-        }
-    )
-
-    assert ha_ws_proxy._downgrade_capabilities_if_needed(message, pending, meta) == message
-
-
-def test_generic_brand_camera_capabilities_are_downgraded_to_mjpeg_fallback():
-    pending = {44: "camera.side_gate"}
-    meta = {"camera.side_gate": {"brand": "generic", "model": "", "friendly_name": "side gate"}}
-    message = json.dumps(
-        {
-            "id": 44,
-            "type": "result",
-            "success": True,
-            "result": {"frontend_stream_types": ["hls", "web_rtc"]},
-        }
-    )
-
-    rewritten = ha_ws_proxy._downgrade_capabilities_if_needed(message, pending, meta)
-    data = json.loads(rewritten)
-
-    assert data["result"]["frontend_stream_types"] == []

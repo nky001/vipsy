@@ -4,10 +4,10 @@ from pathlib import Path
 def test_ha_proxy_strips_forwarded_headers_for_default_install():
     config = (Path(__file__).parents[1] / "rootfs" / "caddy" / "Caddyfile").read_text()
 
-    assert config.count("header_up -X-Forwarded-For") == 2
+    assert config.count("header_up -X-Forwarded-For") == 3
     assert config.count("header_up -X-Forwarded-Proto") == 1
     assert config.count("header_up -X-Forwarded-Host") == 1
-    assert config.count("header_up -X-Real-IP") == 2
+    assert config.count("header_up -X-Real-IP") == 3
 
 
 def test_webrtc_camera_route_preserves_tunnel_origin_before_generic_proxy():
@@ -32,13 +32,13 @@ def test_ha_websocket_uses_compatibility_proxy_for_camera_capabilities():
     assert "flush_interval -1" in websocket_block
 
 
-def test_camera_proxy_stream_uses_addon_mjpeg_adapter():
+def test_home_assistant_camera_and_media_streams_are_forwarded_without_buffering():
     config = (Path(__file__).parents[1] / "rootfs" / "caddy" / "Caddyfile").read_text()
 
-    stream_block = config.split("reverse_proxy @ha_camera_stream", 1)[1].split("@ha_webrtc", 1)[0]
-    assert "path /api/camera_proxy_stream*" in config
-    assert "reverse_proxy @ha_camera_stream 127.0.0.1:18099" in config
-    assert config.index("reverse_proxy @ha_camera_stream") < config.index("reverse_proxy @ha_webrtc")
+    stream_block = config.split("reverse_proxy @ha_media_stream", 1)[1].split("@ha_webrtc", 1)[0]
+    assert "path /api/camera_proxy_stream* /api/hls* /api/stream*" in config
+    assert "reverse_proxy @ha_media_stream {$HA_CORE_URL:http://homeassistant:8123}" in config
+    assert config.index("reverse_proxy @ha_media_stream") < config.index("reverse_proxy @ha_webrtc")
     assert "flush_interval -1" in stream_block
 
 

@@ -24,10 +24,15 @@
 		flush_interval -1
 	}
 
-	@ha_camera_stream {
-		path /api/camera_proxy_stream*
+	@ha_media_stream {
+		path /api/camera_proxy_stream* /api/hls* /api/stream*
 	}
-	reverse_proxy @ha_camera_stream 127.0.0.1:18099 {
+	reverse_proxy @ha_media_stream {$HA_CORE_URL:http://homeassistant:8123} {
+		header_up Host {host}
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Proto https
+		header_up -X-Forwarded-For
+		header_up -X-Real-IP
 		flush_interval -1
 	}
 
