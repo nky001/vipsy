@@ -42,6 +42,7 @@ def test_home_assistant_camera_and_media_streams_are_forwarded_without_buffering
     assert config.index("reverse_proxy @ha_media_stream") < config.index("reverse_proxy @ha_webrtc")
     assert "header_up Host {$HA_PROXY_HOST:homeassistant}" in stream_block
     assert "header_up -X-Forwarded-Proto" in stream_block
+    assert 'header_down Cache-Control "no-store, no-transform"' in stream_block
     assert "flush_interval -1" in stream_block
 
 

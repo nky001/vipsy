@@ -33,6 +33,7 @@
 		header_up -X-Forwarded-Proto
 		header_up -X-Forwarded-Host
 		header_up -X-Real-IP
+		header_down Cache-Control "no-store, no-transform"
 		flush_interval -1
 	}
 
