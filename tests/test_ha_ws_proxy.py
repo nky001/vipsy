@@ -43,12 +43,24 @@ class FakeMessageSocket:
         self.sent.append(message)
 
 
-def test_camera_capabilities_are_forwarded_without_rewriting():
-    capabilities = '{"id":12,"type":"result","success":true,"result":{"frontend_stream_types":["hls"]}}'
+def test_generic_camera_keeps_hls_and_skips_broken_webrtc_provider():
+    capabilities = '{"id":12,"type":"result","success":true,"result":{"frontend_stream_types":["hls","web_rtc"]}}'
+    upstream = FakeMessageSocket([capabilities])
+    client = FakeMessageSocket([])
+    pending = {12: "camera.192_168_7_130"}
+
+    asyncio.run(ha_ws_proxy._ha_to_client(client, upstream, pending, {}))
+
+    assert len(client.sent) == 1
+    assert '"frontend_stream_types":["hls"]' in client.sent[0]
+
+
+def test_non_generic_camera_web_rtc_capability_is_preserved():
+    capabilities = '{"id":12,"type":"result","success":true,"result":{"frontend_stream_types":["hls","web_rtc"]}}'
     upstream = FakeMessageSocket([capabilities])
     client = FakeMessageSocket([])
 
-    asyncio.run(ha_ws_proxy._ha_to_client(client, upstream))
+    asyncio.run(ha_ws_proxy._ha_to_client(client, upstream, {12: "camera.hikvision_driveway"}, {}))
 
     assert client.sent == [capabilities]
 
