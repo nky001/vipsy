@@ -1,178 +1,120 @@
+"""Transparent HA websocket relay with non-blocking camera diagnostics."""
 import asyncio
 import json
 import os
 import re
-from typing import Any
 
 import websockets
+from camera_diagnostics import CameraDiagnostics
 
 LISTEN_HOST = os.environ.get("HA_WS_PROXY_HOST", "127.0.0.1")
 LISTEN_PORT = int(os.environ.get("HA_WS_PROXY_PORT", "18100"))
 UPSTREAM_URL = os.environ.get("HA_WS_UPSTREAM_URL", "ws://homeassistant:8123/api/websocket")
-GENERIC_CAMERA_RE = re.compile(
-    os.environ.get(
-        "VIPSY_GENERIC_CAMERA_PATTERN",
-        r"^camera\.(generic_|[0-9]{1,3}(?:_[0-9]{1,3}){3}(?:_|$))",
-    )
-)
 UPSTREAM_HEADER_ALLOWLIST = {
-    "authorization",
-    "cookie",
-    "user-agent",
-    "x-ha-access",
-    "x-hassio-key",
-    "x-supervisor-token",
+    "authorization", "cookie", "user-agent", "x-ha-access",
+    "x-hassio-key", "x-supervisor-token",
 }
+CAMERA_ENTITY = re.compile(r"camera\.[a-z0-9_]{1,200}\Z")
+MAX_PENDING = 128
+diagnostics = CameraDiagnostics()
 
 
-def _update_camera_meta(camera_meta: dict[str, dict[str, str]], payload: Any) -> None:
-    if isinstance(payload, list):
-        for item in payload:
-            _update_camera_meta(camera_meta, item)
-        return
-    if not isinstance(payload, dict):
-        return
-    entity_id = payload.get("entity_id")
-    if not isinstance(entity_id, str) or not entity_id.startswith("camera."):
-        return
-    attrs = payload.get("attributes")
-    if not isinstance(attrs, dict):
-        return
-    camera_meta[entity_id] = {
-        "brand": str(attrs.get("brand") or attrs.get("manufacturer") or "").strip().lower(),
-        "model": str(attrs.get("model_name") or attrs.get("model") or "").strip().lower(),
-    }
-
-
-def _is_generic_camera(entity_id: str, camera_meta: dict[str, dict[str, str]]) -> bool:
-    meta = camera_meta.get(entity_id, {})
-    return "generic" in {meta.get("brand"), meta.get("model")} or bool(GENERIC_CAMERA_RE.search(entity_id))
-
-
-def _preserve_hls_for_generic_camera(
-    message: str,
-    pending_capabilities: dict[int, str],
-    camera_meta: dict[str, dict[str, str]],
-) -> str:
+def _json_object(message):
+    if not isinstance(message, str):
+        return {}
     try:
         data = json.loads(message)
-    except (TypeError, json.JSONDecodeError):
-        return message
-
-    if not isinstance(data, dict):
-        return message
-    if data.get("type") == "result" and data.get("success"):
-        _update_camera_meta(camera_meta, data.get("result"))
-        msg_id = data.get("id")
-        entity_id = pending_capabilities.pop(msg_id, None) if isinstance(msg_id, int) else None
-        result = data.get("result")
-        if entity_id and _is_generic_camera(entity_id, camera_meta) and isinstance(result, dict):
-            stream_types = result.get("frontend_stream_types")
-            if isinstance(stream_types, list):
-                keys = {str(value).strip().lower().replace("-", "_") for value in stream_types}
-                webrtc_types = {"web_rtc", "webrtc"}
-                print(
-                    f"[vipsy.ws] camera capabilities for {entity_id}: {stream_types}",
-                    flush=True,
-                )
-                if "hls" in keys and keys.intersection(webrtc_types):
-                    result["frontend_stream_types"] = [
-                        value for value in stream_types
-                        if str(value).strip().lower().replace("-", "_") not in webrtc_types
-                    ]
-                elif keys.intersection(webrtc_types) or not keys:
-                    # Generic RTSP cameras use HA's stream integration (HLS).
-                    # A go2rtc WebRTC provider may advertise an unavailable
-                    # RTSP alias, so keep the built-in stream path selectable.
-                    result["frontend_stream_types"] = ["hls"]
-                else:
-                    return message
-                if result["frontend_stream_types"] != stream_types:
-                    print(
-                        f"[vipsy.ws] selecting HLS for generic camera {entity_id}; "
-                        f"original_stream_types={stream_types}",
-                        flush=True,
-                    )
-                    return json.dumps(data, separators=(",", ":"))
-    else:
-        event = data.get("event")
-        if isinstance(event, dict):
-            event_data = event.get("data")
-            if isinstance(event_data, dict):
-                _update_camera_meta(camera_meta, event_data.get("new_state"))
-    return message
+        return data if isinstance(data, dict) else {}
+    except (ValueError, TypeError):
+        return {}
 
 
-async def _client_to_ha(client_ws, ha_ws, pending_capabilities: dict[int, str]) -> None:
+async def _client_to_ha(client_ws, ha_ws, pending):
     async for message in client_ws:
-        if isinstance(message, str):
-            try:
-                data = json.loads(message)
-                if isinstance(data, dict) and data.get("type") == "camera/capabilities":
-                    msg_id = data.get("id")
-                    entity_id = data.get("entity_id")
-                    if isinstance(msg_id, int) and isinstance(entity_id, str):
-                        pending_capabilities[msg_id] = entity_id
-                        if _is_generic_camera(entity_id, {}):
-                            print(f"[vipsy.ws] camera/capabilities requested for {entity_id}", flush=True)
-            except json.JSONDecodeError:
-                pass
+        data = _json_object(message)
+        command, entity, msg_id = data.get("type"), data.get("entity_id"), data.get("id")
+        if (command in ("camera/capabilities", "camera/stream")
+                and type(msg_id) is int and isinstance(entity, str)
+                and CAMERA_ENTITY.fullmatch(entity)):
+            if len(pending) >= MAX_PENDING:
+                pending.pop(next(iter(pending)))
+            pending[msg_id] = (command, entity)
         await ha_ws.send(message)
 
 
-async def _ha_to_client(client_ws, ha_ws, pending_capabilities, camera_meta) -> None:
+async def _ha_to_client(client_ws, ha_ws, pending):
     async for message in ha_ws:
-        if isinstance(message, str):
-            message = _preserve_hls_for_generic_camera(message, pending_capabilities, camera_meta)
+        # Never invent capabilities or disable WebRTC based on entity names.
+        # Forward first: camera diagnostics must not stall the HA UI.
         await client_ws.send(message)
+        data = _json_object(message)
+        if data.get("type") != "result" or type(data.get("id")) is not int:
+            continue
+        tracked = pending.pop(data["id"], None)
+        if not tracked:
+            continue
+        command, entity = tracked
+        if data.get("success") is not True:
+            # Upstream error messages can contain camera passwords/bearer URLs.
+            diagnostics.record(entity, {"event": "ha_request_failed", "command": command})
+            continue
+        result = data.get("result")
+        if not isinstance(result, dict):
+            continue
+        if command == "camera/capabilities":
+            types = result.get("frontend_stream_types")
+            if isinstance(types, list):
+                diagnostics.record(entity, {
+                    "event": "capabilities", "transports": [
+                        value for value in types if value in ("hls", "web_rtc")
+                    ], "policy": "native",
+                })
+        elif isinstance(result.get("url"), str):
+            diagnostics.schedule(entity, result["url"])
 
 
-def _upstream_headers(client_ws) -> list[tuple[str, str]]:
+def _upstream_headers(client_ws):
     headers = getattr(client_ws, "request_headers", None)
     if not headers:
         return []
-    forwarded: list[tuple[str, str]] = []
-    for name, value in headers.raw_items():
-        if name.lower() in UPSTREAM_HEADER_ALLOWLIST:
-            forwarded.append((name, value))
-    return forwarded
+    return [(name, value) for name, value in headers.raw_items()
+            if name.lower() in UPSTREAM_HEADER_ALLOWLIST]
 
 
-def _upstream_origin(client_ws) -> str | None:
+def _upstream_origin(client_ws):
     headers = getattr(client_ws, "request_headers", None)
-    if not headers:
-        return None
-    return headers.get("Origin")
+    return headers.get("Origin") if headers else None
 
 
-async def _handle_client(client_ws, path=None) -> None:
-    pending_capabilities: dict[int, str] = {}
-    camera_meta: dict[str, dict[str, str]] = {}
+async def _handle_client(client_ws, path=None):
+    pending, tasks = {}, set()
     try:
         async with websockets.connect(
-            UPSTREAM_URL,
-            extra_headers=_upstream_headers(client_ws),
-            origin=_upstream_origin(client_ws),
-            max_size=None,
-            ping_interval=20,
-            ping_timeout=20,
+            UPSTREAM_URL, extra_headers=_upstream_headers(client_ws),
+            origin=_upstream_origin(client_ws), max_size=None,
+            ping_interval=20, ping_timeout=20,
         ) as ha_ws:
-            to_ha = asyncio.create_task(_client_to_ha(client_ws, ha_ws, pending_capabilities))
-            to_client = asyncio.create_task(_ha_to_client(client_ws, ha_ws, pending_capabilities, camera_meta))
-            done, pending = await asyncio.wait({to_ha, to_client}, return_when=asyncio.FIRST_COMPLETED)
-            for task in pending:
-                task.cancel()
+            tasks = {
+                asyncio.create_task(_client_to_ha(client_ws, ha_ws, pending)),
+                asyncio.create_task(_ha_to_client(client_ws, ha_ws, pending)),
+            }
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
-                try:
-                    task.result()
-                except websockets.ConnectionClosed:
-                    pass
+                task.result()
+    except websockets.ConnectionClosed:
+        pass
     except Exception as exc:
-        print(f"[vipsy.ws] websocket proxy closed: {exc}", flush=True)
+        print(f"[vipsy.ws] upstream connection failed: {type(exc).__name__}", flush=True)
+        await client_ws.close(code=1011, reason="Home Assistant connection unavailable")
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        pending.clear()
 
 
-async def _run() -> None:
-    print(f"[vipsy.ws] listening on {LISTEN_HOST}:{LISTEN_PORT}, upstream={UPSTREAM_URL}", flush=True)
+async def _run():
+    print(f"[vipsy.ws] listening on {LISTEN_HOST}:{LISTEN_PORT}; camera policy=native", flush=True)
     async with websockets.serve(_handle_client, LISTEN_HOST, LISTEN_PORT, max_size=None):
         await asyncio.Future()
 

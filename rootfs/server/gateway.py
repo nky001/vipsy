@@ -30,6 +30,7 @@ import hub_manager
 import agent
 import dns_manager
 import control_plane
+import camera_diagnostics
 
 OPTIONS_PATH = os.environ.get("OPTIONS_PATH", "/data/options.json")
 INGRESS_PORT = int(os.environ.get("INGRESS_PORT", 18099))
@@ -583,7 +584,18 @@ def diagnostics():
         except Exception:
             pass
 
-    return jsonify(warnings=warnings, count=len(warnings))
+    camera_streams = camera_diagnostics.read_report()
+    for entity, report in camera_streams.get("cameras", {}).items():
+        if time.time() - report.get("updated_at", 0) > 3600:
+            continue
+        if report.get("status") == "mp4v_requires_compatible_source_or_transcoding":
+            warnings.append(
+                f"{entity}: HLS contains an mp4v sample entry (possibly MJPEG or MPEG-4 Part 2). "
+                "Select a verified H.264 RTSP profile or transcode the source; changing tunnel buffering will not fix the codec."
+            )
+        elif report.get("status") == "origin_http_error":
+            warnings.append(f"{entity}: Home Assistant HLS returned HTTP {report.get('http_status')} at {report.get('stage')}")
+    return jsonify(warnings=warnings, count=len(warnings), camera_streams=camera_streams)
 
 
 def _read_auth_token():
